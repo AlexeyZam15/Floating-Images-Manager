@@ -1489,9 +1489,17 @@ class ImageGallery:
 
     def setup_hotkeys(self):
         def handle_hotkey(event):
-            # Глобальная обработка H (без модификаторов)
-            if event.keysym.lower() == 'h':
+            # Проверяем физическую клавишу по keycode (код физической клавиши)
+            # Код 72 - это физическая клавиша 'H' на большинстве клавиатур
+            # В английской раскладке это 'H', в русской - 'Р'
+            if event.keycode == 72:  # Физическая клавиша H (она же Р в русской раскладке)
                 # Проверяем, что не нажаты модификаторы (Ctrl, Alt, Shift)
+                if not (event.state & 0x4 or event.state & 0x1 or event.state & 0x20000):
+                    self.toggle_all_windows(event)
+                    return "break"
+
+            # Также проверяем по символу для обратной совместимости
+            if event.keysym.lower() in ('h', 'р'):  # Добавляем русскую 'р'
                 if not (event.state & 0x4 or event.state & 0x1 or event.state & 0x20000):
                     self.toggle_all_windows(event)
                     return "break"
