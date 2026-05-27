@@ -11,27 +11,42 @@ import shutil
 import math
 
 # ============== НАСТРОЙКИ ==============
-# Получаем путь к папке с приложением
-APP_DIR = Path(__file__).parent.absolute()
+# Получаем путь к папке Documents/floating_images
+DOCUMENTS_DIR = Path.home() / "Documents" / "floating_images"
+APP_DIR = DOCUMENTS_DIR  # Основная папка приложения в My Documents
 CONFIG_DIR = APP_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 GALLERY_FILE = CONFIG_DIR / "gallery.json"
 STORAGE_DIR = APP_DIR / "storage"
 
 
+# Функция для создания необходимых папок
+def ensure_app_directories():
+    """Создает все необходимые папки приложения в My Documents/floating_images"""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"Папки созданы в: {APP_DIR}")
+        return True
+    except Exception as e:
+        print(f"Ошибка создания папок: {e}")
+        return False
+
+
 # Функция для миграции старых файлов
 def migrate_old_files():
-    """Переносит старые файлы из AppData в папку с приложением"""
-    old_config_dir = Path.home() / "AppData" / "Local" / "floating_images"
-    old_config_file = old_config_dir / "settings.json"
-    old_gallery_file = old_config_dir / "gallery.json"
-    old_temp_dir = old_config_dir
+    """Переносит старые файлы из старой папки в новую в My Documents/floating_images"""
+    # Старая папка (в папке с программой или в AppData)
+    old_config_dir = Path(__file__).parent / "config"
+    old_storage_dir = Path(__file__).parent / "storage"
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    # Создаем новые папки
+    ensure_app_directories()
 
     migrated = False
 
+    # Переносим файл настроек
+    old_config_file = old_config_dir / "settings.json"
     if old_config_file.exists():
         try:
             shutil.copy2(old_config_file, CONFIG_FILE)
@@ -40,6 +55,8 @@ def migrate_old_files():
         except Exception as e:
             print(f"Ошибка переноса настроек: {e}")
 
+    # Переносим файл галереи
+    old_gallery_file = old_config_dir / "gallery.json"
     if old_gallery_file.exists():
         try:
             shutil.copy2(old_gallery_file, GALLERY_FILE)
@@ -48,21 +65,21 @@ def migrate_old_files():
         except Exception as e:
             print(f"Ошибка переноса галереи: {e}")
 
-    if old_temp_dir.exists():
+    # Переносим файлы из storage
+    if old_storage_dir.exists():
         try:
-            temp_files_copied = 0
-            for old_temp_file in old_temp_dir.glob("clipboard_*.png"):
-                new_storage_file = STORAGE_DIR / old_temp_file.name
-                if not new_storage_file.exists():
-                    shutil.copy2(old_temp_file, new_storage_file)
-                    temp_files_copied += 1
-            if temp_files_copied > 0:
-                print(f"Перенесено {temp_files_copied} временных файлов в storage")
-                migrated = True
+            for old_file in old_storage_dir.glob("*"):
+                if old_file.is_file():
+                    new_file = STORAGE_DIR / old_file.name
+                    if not new_file.exists():
+                        shutil.copy2(old_file, new_file)
+                        print(f"Перенесен файл: {old_file.name}")
+                        migrated = True
         except Exception as e:
-            print(f"Ошибка переноса временных файлов: {e}")
+            print(f"Ошибка переноса файлов storage: {e}")
 
-    if migrated and GALLERY_FILE.exists():
+    # Обновляем пути в gallery.json
+    if GALLERY_FILE.exists():
         try:
             with open(GALLERY_FILE, 'r', encoding='utf-8') as f:
                 gallery_data = json.load(f)
@@ -71,12 +88,16 @@ def migrate_old_files():
             new_gallery_data = []
 
             for old_path in gallery_data:
-                if str(old_temp_dir) in old_path or "clipboard_" in old_path:
+                # Обновляем пути к storage файлам
+                if "storage" in old_path and (
+                        str(old_config_dir.parent) in old_path or str(Path(__file__).parent) in old_path):
                     filename = Path(old_path).name
                     new_path = str(STORAGE_DIR / filename)
-                    if os.path.exists(new_path) or os.path.exists(old_path):
+                    if os.path.exists(new_path):
                         new_gallery_data.append(new_path)
                         updated = True
+                    elif os.path.exists(old_path):
+                        new_gallery_data.append(old_path)
                     else:
                         print(f"Пропущен несуществующий файл: {old_path}")
                 else:
@@ -89,25 +110,10 @@ def migrate_old_files():
         except Exception as e:
             print(f"Ошибка обновления путей в gallery.json: {e}")
 
-    try:
-        if old_config_dir.exists():
-            if old_config_file.exists() and CONFIG_FILE.exists():
-                old_config_file.unlink()
-            if old_gallery_file.exists() and GALLERY_FILE.exists():
-                old_gallery_file.unlink()
-            for old_temp_file in old_temp_dir.glob("clipboard_*.png"):
-                new_storage_file = STORAGE_DIR / old_temp_file.name
-                if new_storage_file.exists():
-                    old_temp_file.unlink()
-            try:
-                if old_config_dir.exists() and not any(old_config_dir.iterdir()):
-                    old_config_dir.rmdir()
-            except:
-                pass
-    except Exception as e:
-        print(f"Ошибка при удалении старых файлов: {e}")
+    return migrated
 
 
+# Выполняем миграцию
 migrate_old_files()
 
 
@@ -1427,6 +1433,20 @@ class ImageGallery:
         # Фокус на главное окно
         self.root.focus_force()
 
+    def open_app_folder(self):
+        """Открывает папку с данными приложения (My Documents/floating_images)"""
+        try:
+            if APP_DIR.exists():
+                os.startfile(str(APP_DIR))
+                self.info_label.config(text=f"📂 Открыта папка: {APP_DIR}")
+            else:
+                # Если папки нет, создаем и открываем
+                ensure_app_directories()
+                os.startfile(str(APP_DIR))
+                self.info_label.config(text=f"📂 Папка создана и открыта: {APP_DIR}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть папку\n{str(e)}")
+
     def toggle_all_windows(self, event=None):
         """Скрыть или показать все окна с картинками"""
         # Очищаем список от закрытых окон
@@ -1600,6 +1620,8 @@ class ImageGallery:
         file_menu.add_command(label="Показать все (Ctrl+A)", command=self.show_all)
         file_menu.add_command(label="Закрыть все окна (Ctrl+W)", command=self.close_all)
         file_menu.add_separator()
+        file_menu.add_command(label="Открыть папку приложения", command=self.open_app_folder)
+        file_menu.add_separator()
         file_menu.add_command(label="Выход (Ctrl+Q)", command=self.on_close)
 
         edit_menu = tk.Menu(menubar, tearoff=0, bg='#2b2b2b', fg='white')
@@ -1660,7 +1682,7 @@ class ImageGallery:
 
     def show_about(self):
         about_text = """Менеджер плавающих картинок
-Версия 2.7
+Версия 2.8
 
 Программа для просмотра изображений в плавающих окнах.
 
@@ -1673,10 +1695,11 @@ class ImageGallery:
 • Сохранение настроек
 • Интеллектуальное изменение размера окон
 • Сохранение списка картинок между сеансами
-• Все файлы хранятся в папке с программой
+• Все файлы хранятся в папке Documents/floating_images
 • Картинки из буфера сохраняются в папку storage/
 • Настраиваемая скорость и плавность зума
 • Скрытие/показ всех окон по клавише H
+• Кнопка открытия папки с данными приложения
 
 Управление изменением размера:
 • Обычное растягивание - масштабирует картинку
@@ -1755,9 +1778,14 @@ class ImageGallery:
                                  padx=15, pady=10, font=('Segoe UI', 11, 'bold'), cursor='hand2')
         btn_settings.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
 
+        btn_folder = tk.Button(button_frame, text="📂 ПАПКА ПРИЛОЖЕНИЯ",
+                               command=self.open_app_folder, bg='#4a4a4a', fg='white',
+                               padx=15, pady=10, font=('Segoe UI', 11, 'bold'), cursor='hand2')
+        btn_folder.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+
         self.info_label = tk.Label(main_container,
-                                   text=f"✅ Готов к работе! H - скрыть/показать окна",
-                                   font=('Segoe UI', 11), bg='#2b2b2b', fg='#888888')
+                                   text=f"✅ Готов к работе! H - скрыть/показать окна\n📁 Данные хранятся в: {APP_DIR}",
+                                   font=('Segoe UI', 10), bg='#2b2b2b', fg='#888888', justify=tk.LEFT)
         self.info_label.pack(pady=(0, 10))
 
         self.root.bind("<F1>", lambda e: self.open_settings())
