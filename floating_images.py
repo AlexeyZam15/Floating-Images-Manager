@@ -6,7 +6,6 @@ from pathlib import Path
 import time
 import threading
 import json
-from functools import lru_cache
 import shutil
 import math
 
@@ -502,6 +501,7 @@ class FloatingImage:
         self.image_loaded = False
         self.loading_thread = None
         self.mouse_over = False
+        self.keep_aspect = True  # Включаем для работы зума
 
         self.resize_with_shift = False
         self.resize_with_ctrl = False
@@ -536,6 +536,23 @@ class FloatingImage:
         self.window_width = 400
         self.window_height = 300
 
+        # Переменные для изображения
+        self.img_width = 0
+        self.img_height = 0
+        self.display_width = 0
+        self.display_height = 0
+        self.image_x = 0
+        self.image_y = 0
+        self.current_image = None
+        self.photo_image = None
+        self.original_image = None
+        self.original_width = 0
+        self.original_height = 0
+        self._last_canvas_size = (0, 0)
+
+        # Таймеры
+        self.hide_timer = None
+
         self.master.title("")
         self.master.overrideredirect(True)
         self.master.attributes('-topmost', self.settings.get("always_on_top"))
@@ -551,32 +568,866 @@ class FloatingImage:
 
         self.show_loading_indicator()
         self.load_image_async()
+        self._zoom_timer = None
 
-        self.hide_timer = None
+    def on_mousewheel_zoom(self, event):
+        """Зум - с отложенным повышением качества"""
+        try:
+            if not self.image_loaded:
+                return "break"
 
-        self.current_image = None
-        self.photo_image = None
-        self.image_x = 0
-        self.image_y = 0
-        self.original_image = None
-        self.original_width = 0
-        self.original_height = 0
+            # Отменяем предыдущий таймер
+            if self._zoom_timer:
+                self.master.after_cancel(self._zoom_timer)
+                self._zoom_timer = None
+
+            self.keep_aspect = True
+
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+
+            if canvas_width <= 0 or canvas_height <= 0:
+                return "break"
+
+            # Определяем шаг зума
+            if event.state & 0x0001:
+                zoom_step = self.zoom_step_fast
+            elif event.state & 0x0004:
+                zoom_step = self.zoom_step_slow
+            else:
+                zoom_step = self.zoom_step_normal
+
+            cursor_x = event.x
+            cursor_y = event.y
+
+            if self.display_width > 0 and self.display_height > 0:
+                img_point_x = (cursor_x - self.image_x) / self.display_width
+                img_point_y = (cursor_y - self.image_y) / self.display_height
+                img_point_x = max(0, min(1, img_point_x))
+                img_point_y = max(0, min(1, img_point_y))
+            else:
+                img_point_x, img_point_y = 0.5, 0.5
+
+            if event.delta > 0:
+                new_zoom = min(self.user_zoom * zoom_step, self.max_zoom)
+            else:
+                new_zoom = max(self.user_zoom / zoom_step, self.min_zoom)
+
+            if new_zoom == self.user_zoom:
+                return "break"
+
+            self.user_zoom = new_zoom
+
+            new_display_width = int(self.original_width * self.user_zoom)
+            new_display_height = int(self.original_height * self.user_zoom)
+
+            new_image_x = cursor_x - img_point_x * new_display_width
+            new_image_y = cursor_y - img_point_y * new_display_height
+
+            if new_display_width <= canvas_width:
+                new_image_x = (canvas_width - new_display_width) // 2
+            else:
+                min_x = canvas_width - new_display_width
+                max_x = 0
+                new_image_x = max(min(new_image_x, max_x), min_x)
+
+            if new_display_height <= canvas_height:
+                new_image_y = (canvas_height - new_display_height) // 2
+            else:
+                min_y = canvas_height - new_display_height
+                max_y = 0
+                new_image_y = max(min(new_image_y, max_y), min_y)
+
+            self.display_width = new_display_width
+            self.display_height = new_display_height
+            self.image_x = new_image_x
+            self.image_y = new_image_y
+
+            # БЫСТРЫЙ ресайз (NEAREST) - мгновенный отклик
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.NEAREST)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+
+            # Через 200 мс после последнего вращения колесика - повышаем качество
+            self._zoom_timer = self.master.after(200, self.update_image_quality)
+
+            percent = int(self.user_zoom * 100)
+            self.show_tooltip(f"🔍 {percent}%", 200)
+
+        except Exception as e:
+            print(f"Ошибка в зуме: {e}")
+
+        return "break"
+
+    def update_image_quality(self):
+        """Обновляет изображение с высоким качеством (после окончания зума)"""
+        if not self.image_loaded or self._zoom_timer is None:
+            return
+
+        try:
+            # Качественный ресайз LANCZOS
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.LANCZOS)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+        except Exception as e:
+            print(f"Ошибка повышения качества: {e}")
+
+        self._zoom_timer = None
+
+    def reset_zoom(self):
+        """Сброс зума и центрирование изображения"""
+        if self.image_loaded:
+            self.user_zoom = 1.0
+            self.update_image()
+            self.show_tooltip("✅ Зум сброшен", 1000)
+
+    def reset_window(self):
+        """Полный сброс окна: размер, зум, позиция как при открытии"""
+        if not self.image_loaded:
+            return
+
+        # Сбрасываем зум
+        self.user_zoom = 1.0
+
+        # Сбрасываем размер окна к оптимальному
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+
+        # Вычисляем оптимальный размер (как при открытии)
+        max_width = min(self.original_width, int(screen_width * 0.6))
+        max_height = min(self.original_height, int(screen_height * 0.6))
+
+        if self.original_width > max_width or self.original_height > max_height:
+            ratio = min(max_width / self.original_width, max_height / self.original_height)
+            self.window_width = int(self.original_width * ratio)
+            self.window_height = int(self.original_height * ratio)
+        else:
+            self.window_width = self.original_width
+            self.window_height = self.original_height
+
+        # Сбрасываем позицию (открываем рядом с главным окном)
+        self.position_away_from_main()
+
+        # Применяем новый размер и позицию
+        self.master.geometry(
+            f"{self.window_width}x{self.window_height}+{self.master.winfo_x()}+{self.master.winfo_y()}")
+
+        # Обновляем отображение
+        self.calculate_image_size()
+        self.clamp_image_position()
+        self.redraw_image()
+
+        # Сбрасываем режим искажения в обычный
+        self.keep_aspect = True
+
+        self.show_tooltip("✅ Окно сброшено к исходному состоянию", 1500)
+        print(f"Окно сброшено: размер {self.window_width}x{self.window_height}")
+
+    def on_resize(self, event):
+        """Изменение размера окна с поддержкой Shift для сохранения пропорций"""
+        if not self.resizing or not self.image_loaded:
+            return
+
+        current_x = self.master.winfo_pointerx()
+        current_y = self.master.winfo_pointery()
+        delta_x = current_x - self.resize_start_x
+        delta_y = current_y - self.resize_start_y
+
+        new_width = self.resize_start_width
+        new_height = self.resize_start_height
+        new_x = self.resize_start_left
+        new_y = self.resize_start_top
+
+        min_width = 50
+        min_height = 50
+
+        # Расчет нового размера в зависимости от того, за какой край тянем
+        if self.resize_edge == 'right':
+            new_width = max(min_width, self.resize_start_width + delta_x)
+        elif self.resize_edge == 'left':
+            new_width = max(min_width, self.resize_start_width - delta_x)
+            new_x = self.resize_start_left + (self.resize_start_width - new_width)
+        elif self.resize_edge == 'bottom':
+            new_height = max(min_height, self.resize_start_height + delta_y)
+        elif self.resize_edge == 'top':
+            new_height = max(min_height, self.resize_start_height - delta_y)
+            new_y = self.resize_start_top + (self.resize_start_height - new_height)
+        elif self.resize_edge == 'top_left':
+            new_width = max(min_width, self.resize_start_width - delta_x)
+            new_x = self.resize_start_left + (self.resize_start_width - new_width)
+            new_height = max(min_height, self.resize_start_height - delta_y)
+            new_y = self.resize_start_top + (self.resize_start_height - new_height)
+        elif self.resize_edge == 'top_right':
+            new_width = max(min_width, self.resize_start_width + delta_x)
+            new_height = max(min_height, self.resize_start_height - delta_y)
+            new_y = self.resize_start_top + (self.resize_start_height - new_height)
+        elif self.resize_edge == 'bottom_left':
+            new_width = max(min_width, self.resize_start_width - delta_x)
+            new_x = self.resize_start_left + (self.resize_start_width - new_width)
+            new_height = max(min_height, self.resize_start_height + delta_y)
+        elif self.resize_edge == 'bottom_right':
+            new_width = max(min_width, self.resize_start_width + delta_x)
+            new_height = max(min_height, self.resize_start_height + delta_y)
+
+        # ЕСЛИ НАЖАТ SHIFT - СОХРАНЯЕМ ПРОПОРЦИИ
+        if self.resize_with_shift:
+            # Получаем пропорции изображения
+            img_aspect = self.original_width / self.original_height
+
+            # Корректируем размеры с сохранением пропорций
+            if self.resize_edge in ['right', 'left', 'top_left', 'bottom_left', 'top_right', 'bottom_right']:
+                # Тянем за боковые грани - подгоняем высоту под ширину
+                new_height = int(new_width / img_aspect)
+            elif self.resize_edge in ['top', 'bottom']:
+                # Тянем за верх/низ - подгоняем ширину под высоту
+                new_width = int(new_height * img_aspect)
+
+            # Минимальные размеры
+            new_width = max(min_width, new_width)
+            new_height = max(min_height, new_height)
+
+            # Пересчитываем позицию при изменении размеров
+            if self.resize_edge == 'left':
+                new_x = self.resize_start_left + (self.resize_start_width - new_width)
+            elif self.resize_edge == 'top':
+                new_y = self.resize_start_top + (self.resize_start_height - new_height)
+            elif self.resize_edge == 'top_left':
+                new_x = self.resize_start_left + (self.resize_start_width - new_width)
+                new_y = self.resize_start_top + (self.resize_start_height - new_height)
+            elif self.resize_edge == 'top_right':
+                new_y = self.resize_start_top + (self.resize_start_height - new_height)
+            elif self.resize_edge == 'bottom_left':
+                new_x = self.resize_start_left + (self.resize_start_width - new_width)
+
+        # Применяем новый размер
+        self.master.geometry(f"{new_width}x{new_height}+{new_x}+{new_y}")
+        self.window_width = new_width
+        self.window_height = new_height
+
+        # Обновляем изображение в реальном времени
+        self.update_image_resize_live()
+
+    def update_image_resize_live(self):
+        """Обновляет изображение во время изменения размера (живой превью)"""
+        if not self.image_loaded:
+            return
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width <= 0 or canvas_height <= 0:
+            return
+
+        if self.resize_with_shift:
+            # Shift: сохраняем пропорции, масштабируем изображение
+            self.keep_aspect = True
+            # Вычисляем размеры с сохранением пропорций
+            img_width = int(self.original_width * self.user_zoom)
+            img_height = int(self.original_height * self.user_zoom)
+
+            scale = min(canvas_width / img_width, canvas_height / img_height)
+            self.display_width = int(img_width * scale)
+            self.display_height = int(img_height * scale)
+
+            # Центрируем
+            self.image_x = (canvas_width - self.display_width) // 2
+            self.image_y = (canvas_height - self.display_height) // 2
+
+        elif self.resize_with_ctrl:
+            # Ctrl: только размер окна, изображение не меняется
+            self.image_x = (canvas_width - self.display_width) // 2
+            self.image_y = (canvas_height - self.display_height) // 2
+
+        else:
+            # Обычное: растягиваем изображение (искажаем)
+            self.keep_aspect = False
+            self.display_width = canvas_width
+            self.display_height = canvas_height
+            self.image_x = 0
+            self.image_y = 0
+
+        # Быстрая перерисовка
+        try:
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.BILINEAR)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+        except Exception as e:
+            pass
+
+    def stop_resize(self, event):
+        """Останавливает изменение размера"""
+        self.resizing = False
+
+        if self.image_loaded:
+            # Финальное обновление с высоким качеством
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+
+            if self.resize_with_shift:
+                # Shift: финальная подгонка с высоким качеством
+                self.keep_aspect = True
+                img_width = int(self.original_width * self.user_zoom)
+                img_height = int(self.original_height * self.user_zoom)
+                scale = min(canvas_width / img_width, canvas_height / img_height)
+                self.display_width = int(img_width * scale)
+                self.display_height = int(img_height * scale)
+                self.image_x = (canvas_width - self.display_width) // 2
+                self.image_y = (canvas_height - self.display_height) // 2
+
+            elif not self.resize_with_ctrl:
+                # Обычное растягивание
+                self.keep_aspect = False
+                self.display_width = canvas_width
+                self.display_height = canvas_height
+                self.image_x = 0
+                self.image_y = 0
+                self.user_zoom = 1.0
+
+            # Финальная перерисовка с высоким качеством
+            try:
+                resized = self.original_image.resize((self.display_width, self.display_height),
+                                                     Image.Resampling.LANCZOS)
+                self.photo_image = ImageTk.PhotoImage(resized)
+                self.canvas.delete("all")
+                self.current_image = self.canvas.create_image(
+                    int(self.image_x), int(self.image_y),
+                    anchor=tk.NW,
+                    image=self.photo_image
+                )
+            except Exception as e:
+                print(f"Ошибка финальной перерисовки: {e}")
+
+        # Сбрасываем флаги
+        self.resize_with_shift = False
+        self.resize_with_ctrl = False
+        self.resize_edge = None
+
+        # Обновляем границы
+        if self.mouse_over:
+            self.show_resize_borders()
+
+    def update_image_on_resize(self):
+        """Обновляет изображение при изменении размера окна"""
+        if not self.image_loaded:
+            return
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width <= 0 or canvas_height <= 0:
+            return
+
+        # Определяем режим растягивания
+        if hasattr(self, 'resize_with_shift') and self.resize_with_shift:
+            # Shift + растягивание: окно изменяется С СОХРАНЕНИЕМ ПРОПОРЦИЙ
+            self.keep_aspect = True
+
+            # Получаем пропорции изображения
+            img_aspect = self.original_width / self.original_height
+            window_aspect = canvas_width / canvas_height
+
+            # Корректируем размер окна с сохранением пропорций изображения
+            if window_aspect > img_aspect:
+                # Окно шире - подгоняем по высоте
+                new_width = int(canvas_height * img_aspect)
+                new_height = canvas_height
+            else:
+                # Окно выше - подгоняем по ширине
+                new_width = canvas_width
+                new_height = int(canvas_width / img_aspect)
+
+            # Применяем новый размер окна
+            current_x = self.master.winfo_x()
+            current_y = self.master.winfo_y()
+            self.master.geometry(f"{new_width}x{new_height}+{current_x}+{current_y}")
+
+            # Обновляем canvas размеры
+            self.window_width = new_width
+            self.window_height = new_height
+            canvas_width = new_width
+            canvas_height = new_height
+
+            # Обновляем отображение изображения с сохранением пропорций
+            self.display_width = int(self.original_width * self.user_zoom)
+            self.display_height = int(self.original_height * self.user_zoom)
+
+            # Вписываем в canvas
+            scale = min(canvas_width / self.display_width, canvas_height / self.display_height)
+            self.display_width = int(self.display_width * scale)
+            self.display_height = int(self.display_height * scale)
+
+            # Центрируем
+            self.image_x = (canvas_width - self.display_width) // 2
+            self.image_y = (canvas_height - self.display_height) // 2
+
+        elif hasattr(self, 'resize_with_ctrl') and self.resize_with_ctrl:
+            # Ctrl + растягивание: только размер окна, изображение не меняется
+            self.keep_aspect = self.keep_aspect  # Сохраняем текущий режим
+            # Центрируем текущее изображение
+            self.image_x = (canvas_width - self.display_width) // 2
+            self.image_y = (canvas_height - self.display_height) // 2
+
+        else:
+            # Обычное растягивание: изображение растягивается на весь canvas (искажается)
+            self.keep_aspect = False
+            self.display_width = canvas_width
+            self.display_height = canvas_height
+            self.image_x = 0
+            self.image_y = 0
+            # Сбрасываем зум при растягивании
+            self.user_zoom = 1.0
+
+        # Перерисовываем изображение
+        try:
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.LANCZOS)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+        except Exception as e:
+            print(f"Ошибка перерисовки: {e}")
+
+    def calculate_image_size(self):
+        """Пересчитывает размеры изображения (для keep_aspect = True)"""
+        if not self.original_image:
+            return
+
+        try:
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+
+            if canvas_width <= 0 or canvas_height <= 0:
+                return
+
+            if self.keep_aspect:
+                # Режим сохранения пропорций
+                img_width = int(self.original_width * self.user_zoom)
+                img_height = int(self.original_height * self.user_zoom)
+
+                # Вписываем в canvas
+                scale = min(canvas_width / img_width, canvas_height / img_height)
+                self.display_width = int(img_width * scale)
+                self.display_height = int(img_height * scale)
+            else:
+                # Режим растяжения
+                self.display_width = canvas_width
+                self.display_height = canvas_height
+
+        except Exception as e:
+            print(f"calculate_image_size ошибка: {e}")
+
+    def redraw_image(self):
+        """Перерисовывает изображение на canvas"""
+        if not self.original_image or self.display_width <= 0 or self.display_height <= 0:
+            return
+
+        try:
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.LANCZOS)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+
+            # Позиционируем
+            if self.keep_aspect:
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                self.image_x = (canvas_width - self.display_width) // 2
+                self.image_y = (canvas_height - self.display_height) // 2
+            # else: позиция уже установлена в update_image_on_resize
+
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+
+        except Exception as e:
+            print(f"redraw_image ошибка: {e}")
+
+    def _fast_redraw(self):
+        """Быстрая перерисовка для зума"""
+        if not self.original_image or self.display_width <= 0 or self.display_height <= 0:
+            return
+
+        try:
+            # Используем более быстрый метод ресайза для маленьких изменений
+            resized = self.original_image.resize((self.display_width, self.display_height), Image.Resampling.BILINEAR)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(
+                int(self.image_x), int(self.image_y),
+                anchor=tk.NW,
+                image=self.photo_image
+            )
+        except Exception as e:
+            print(f"_fast_redraw ошибка: {e}")
+
+    def clamp_image_position(self):
+        """Ограничивает позицию изображения при панорамировании"""
+        try:
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+
+            if canvas_width <= 0 or canvas_height <= 0:
+                return
+
+            # Если изображение меньше canvas - центрируем
+            if self.display_width <= canvas_width:
+                self.image_x = (canvas_width - self.display_width) // 2
+            else:
+                # Если больше - ограничиваем, чтобы не было пустых областей
+                min_x = canvas_width - self.display_width
+                max_x = 0
+                self.image_x = max(min(self.image_x, max_x), min_x)
+
+            if self.display_height <= canvas_height:
+                self.image_y = (canvas_height - self.display_height) // 2
+            else:
+                min_y = canvas_height - self.display_height
+                max_y = 0
+                self.image_y = max(min(self.image_y, max_y), min_y)
+
+        except Exception as e:
+            print(f"clamp_image_position ошибка: {e}")
+
+    def update_image(self):
+        """Обновляет изображение"""
+        if not self.image_loaded:
+            return
+
+        try:
+            self.calculate_image_size()
+            self.clamp_image_position()
+            self.redraw_image()
+        except Exception as e:
+            print(f"update_image ошибка: {e}")
 
     def bind_events(self):
+        """Привязка событий"""
+        print("\n🔧 ПРИВЯЗКА СОБЫТИЙ...")
+
+        # Привязываем события колесика
         self.canvas.bind("<MouseWheel>", self.on_mousewheel_zoom)
+        self.canvas.bind("<Button-4>", self.on_mousewheel_zoom)
+        self.canvas.bind("<Button-5>", self.on_mousewheel_zoom)
+        print("  ✅ Привязаны: <MouseWheel>, <Button-4>, <Button-5>")
+
+        # Панорамирование и перемещение
         self.canvas.bind("<ButtonPress-1>", self.start_pan)
         self.canvas.bind("<B1-Motion>", self.on_pan)
         self.canvas.bind("<ButtonRelease-1>", self.stop_pan)
 
+        # Изменение размера canvas
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
+
+        # Глобальные события для перемещения окна
         self.master.bind("<ButtonPress-1>", self.on_global_press)
         self.master.bind("<B1-Motion>", self.on_global_motion)
         self.master.bind("<ButtonRelease-1>", self.on_global_release)
 
+        # Средняя кнопка для сброса зума
         self.canvas.bind("<Button-2>", self.on_middle_click_reset)
         self.master.bind("<Button-2>", self.on_middle_click_reset)
 
-        # Устанавливаем фокус
-        self.master.focus_set()
+        # Горячие клавиши
+        self.master.bind("<Control-a>", lambda e: self.toggle_keep_aspect())
+        self.master.bind("<KP_Add>", lambda e: self.zoom_in())
+        self.master.bind("<KP_Subtract>", lambda e: self.zoom_out())
+        self.master.bind("<plus>", lambda e: self.zoom_in())
+        self.master.bind("<minus>", lambda e: self.zoom_out())
+
+        # Фокус на canvas для получения событий колесика
+        self.canvas.focus_set()
+        self.canvas.bind("<Enter>", lambda e: self.canvas.focus_set())
+
+        # События мыши для показа/скрытия UI
+        self.master.bind("<Enter>", self.on_mouse_enter)
+        self.master.bind("<Leave>", self.on_mouse_leave)
+        self.canvas.bind("<Enter>", self.on_mouse_enter)
+        self.canvas.bind("<Leave>", self.on_mouse_leave)
+
+        print("  ✅ Все события привязаны")
+
+    def toggle_keep_aspect(self):
+        """Переключение режима сохранения пропорций - отключено для стабильности зума"""
+        # Для стабильной работы зума всегда оставляем True
+        self.keep_aspect = True
+        self.show_tooltip("🔄 Режим: сохранение пропорций (фиксировано для зума)", 1500)
+
+    def on_image_loaded(self, original_image):
+        """Когда изображение загружено"""
+        self.original_image = original_image
+        self.original_width = self.original_image.width
+        self.original_height = self.original_image.height
+
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+
+        # Начальный размер окна
+        max_width = min(self.original_width, int(screen_width * 0.6))
+        max_height = min(self.original_height, int(screen_height * 0.6))
+
+        if self.original_width > max_width or self.original_height > max_height:
+            ratio = min(max_width / self.original_width, max_height / self.original_height)
+            self.user_zoom = ratio
+        else:
+            self.user_zoom = 1.0
+
+        self.window_width = min(self.original_width, max_width)
+        self.window_height = min(self.original_height, max_height)
+
+        self.master.geometry(f"{self.window_width}x{self.window_height}")
+
+        self.update_canvas_size()
+        self.calculate_image_size()
+
+        # Центрируем изображение
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        self.image_x = (canvas_width - self.display_width) // 2
+        self.image_y = (canvas_height - self.display_height) // 2
+
+        self.redraw_image()
+        self.hide_loading_indicator()
+        self.image_loaded = True
+        self.update_borders_position()
+
+    def debug_bindings(self):
+        """Дебаг привязки событий к колесику мыши"""
+        print("\n" + "=" * 50)
+        print("🔧 ДЕБАГ ПРИВЯЗКИ СОБЫТИЙ")
+
+        # Проверяем, какие события привязаны к canvas
+        print(f"\n📋 Canvas bindings:")
+        try:
+            bindings = self.canvas.bind()
+            print(f"  Все привязки: {bindings}")
+
+            for event_type in ['<MouseWheel>', '<Button-4>', '<Button-5>']:
+                if event_type in bindings:
+                    print(f"  ✅ {event_type} привязан")
+                else:
+                    print(f"  ❌ {event_type} НЕ привязан")
+        except Exception as e:
+            print(f"  Ошибка получения привязок: {e}")
+
+        # Проверяем метод, который привязан к колесику
+        print(f"\n🎯 Проверка метода on_mousewheel_zoom:")
+        print(f"  Существует: {hasattr(self, 'on_mousewheel_zoom')}")
+        if hasattr(self, 'on_mousewheel_zoom'):
+            print(f"  Тип: {type(self.on_mousewheel_zoom)}")
+            print(f"  Документация: {self.on_mousewheel_zoom.__doc__}")
+
+        print("=" * 50 + "\n")
+
+    def on_canvas_configure(self, event):
+        """При изменении размера canvas"""
+        if self.image_loaded and not self.resizing:
+            self.update_image()
+
+    def zoom_in(self):
+        """Увеличение (для кнопок и горячих клавиш)"""
+        if self.image_loaded:
+            old_zoom = self.user_zoom
+            new_zoom = min(self.user_zoom * self.zoom_step_normal, self.max_zoom)
+            if new_zoom != self.user_zoom:
+                self.user_zoom = new_zoom
+                self.calculate_image_size()
+                # Центрируем по центру canvas
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                self.image_x = (canvas_width - self.display_width) // 2
+                self.image_y = (canvas_height - self.display_height) // 2
+                self.clamp_image_position()
+                self.redraw_image()
+                self.show_tooltip(f"🔍 {int(self.user_zoom * 100)}%", 500)
+
+    def zoom_out(self):
+        """Уменьшение (для кнопок и горячих клавиш)"""
+        if self.image_loaded:
+            new_zoom = max(self.user_zoom / self.zoom_step_normal, self.min_zoom)
+            if new_zoom != self.user_zoom:
+                self.user_zoom = new_zoom
+                self.calculate_image_size()
+                # Центрируем по центру canvas
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                self.image_x = (canvas_width - self.display_width) // 2
+                self.image_y = (canvas_height - self.display_height) // 2
+                self.clamp_image_position()
+                self.redraw_image()
+                self.show_tooltip(f"🔍 {int(self.user_zoom * 100)}%", 500)
+
+    def start_pan(self, event):
+        """Начало панорамирования или перемещения окна"""
+        if not self.image_loaded:
+            return
+
+        # Если зум > 1 и режим сохранения пропорций - панорамируем внутри окна
+        if self.user_zoom > 1.0 and self.keep_aspect:
+            self.panning = True
+            self.pan_start_x = event.x
+            self.pan_start_y = event.y
+            self.pan_start_image_x = self.image_x
+            self.pan_start_image_y = self.image_y
+            self.canvas.config(cursor="fleur")
+        else:
+            # Иначе перемещаем всё окно
+            self.window_moving = True
+            self.window_move_start_x = event.x_root - self.master.winfo_x()
+            self.window_move_start_y = event.y_root - self.master.winfo_y()
+            self.canvas.config(cursor="fleur")
+
+        return "break"
+
+    def on_pan(self, event):
+        """Процесс панорамирования"""
+        if self.panning and self.user_zoom > 1.0 and self.keep_aspect:
+            dx = event.x - self.pan_start_x
+            dy = event.y - self.pan_start_y
+
+            self.image_x = self.pan_start_image_x + dx
+            self.image_y = self.pan_start_image_y + dy
+
+            self.clamp_image_position()
+
+            if self.current_image:
+                self.canvas.coords(self.current_image, self.image_x, self.image_y)
+
+            return "break"
+
+        elif self.window_moving:
+            x = event.x_root - self.window_move_start_x
+            y = event.y_root - self.window_move_start_y
+            self.master.geometry(f"+{x}+{y}")
+            return "break"
+
+    def stop_pan(self, event):
+        """Остановка панорамирования"""
+        self.panning = False
+        self.window_moving = False
+        self.canvas.config(cursor="arrow")
+
+    def update_image_with_pivot(self, rel_x, rel_y, old_zoom):
+        """Обновляет изображение с учетом точки привязки (позиции курсора)"""
+        if not self.image_loaded:
+            return
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width <= 0 or canvas_height <= 0:
+            return
+
+        # Вычисляем новые размеры изображения
+        img_width = int(self.original_width * self.user_zoom)
+        img_height = int(self.original_height * self.user_zoom)
+
+        # Определяем масштаб отображения
+        if self.keep_aspect:
+            # Сохраняем пропорции - изображение вписывается в canvas
+            scale = min(canvas_width / img_width, canvas_height / img_height)
+            display_width = int(img_width * scale)
+            display_height = int(img_height * scale)
+
+            # Центрируем изображение
+            self.image_x = (canvas_width - display_width) // 2
+            self.image_y = (canvas_height - display_height) // 2
+        else:
+            # Растягиваем на весь canvas
+            display_width = canvas_width
+            display_height = canvas_height
+            self.image_x = 0
+            self.image_y = 0
+
+        # Создаем масштабированное изображение
+        if display_width > 0 and display_height > 0:
+            resized = self.original_image.resize((display_width, display_height), Image.Resampling.LANCZOS)
+            self.photo_image = ImageTk.PhotoImage(resized)
+
+            # Обновляем canvas
+            self.canvas.delete("all")
+            self.current_image = self.canvas.create_image(self.image_x, self.image_y, anchor=tk.NW,
+                                                          image=self.photo_image)
+
+    def debug_zoom(self):
+        """Дебаг метода зума"""
+        print(f"=== ДЕБАГ ЗУМА ===")
+        print(f"image_loaded: {self.image_loaded}")
+        print(f"user_zoom: {self.user_zoom}")
+        print(f"original_width: {self.original_width}")
+        print(f"original_height: {self.original_height}")
+        print(f"canvas width: {self.canvas.winfo_width()}")
+        print(f"canvas height: {self.canvas.winfo_height()}")
+        print(f"keep_aspect: {self.keep_aspect}")
+
+    def start_resize(self, event):
+        """Начинает изменение размера"""
+        widget = event.widget
+        if widget == self.top_frame:
+            self.resize_edge = 'top'
+        elif widget == self.bottom_frame:
+            self.resize_edge = 'bottom'
+        elif widget == self.left_frame:
+            self.resize_edge = 'left'
+        elif widget == self.right_frame:
+            self.resize_edge = 'right'
+        elif widget == self.top_left:
+            self.resize_edge = 'top_left'
+        elif widget == self.top_right:
+            self.resize_edge = 'top_right'
+        elif widget == self.bottom_left:
+            self.resize_edge = 'bottom_left'
+        elif widget == self.bottom_right:
+            self.resize_edge = 'bottom_right'
+
+        self.resizing = True
+        self.resize_start_x = self.master.winfo_pointerx()
+        self.resize_start_y = self.master.winfo_pointery()
+        self.resize_start_width = self.master.winfo_width()
+        self.resize_start_height = self.master.winfo_height()
+        self.resize_start_left = self.master.winfo_x()
+        self.resize_start_top = self.master.winfo_y()
+
+        # Проверяем нажатые модификаторы при старте
+        self.resize_with_shift = bool(event.state & 0x0001)
+        self.resize_with_ctrl = bool(event.state & 0x0004)
+
+        print(f"Resize start: shift={self.resize_with_shift}, ctrl={self.resize_with_ctrl}")
+
+    def schedule_resize_update(self):
+        """Планирует обновление изображения с небольшой задержкой"""
+        if hasattr(self, '_resize_timer') and self._resize_timer is not None:
+            try:
+                self.master.after_cancel(self._resize_timer)
+            except:
+                pass
+            self._resize_timer = None
+
+        self._resize_timer = self.master.after(16, self.update_image)
 
     def start_window_move(self, event):
         self.window_moving = True
@@ -591,77 +1442,6 @@ class FloatingImage:
 
     def stop_window_move(self, event):
         self.window_moving = False
-
-    def start_pan(self, event):
-        if not self.image_loaded or self.user_zoom <= 1.0:
-            return
-
-        try:
-            if event.widget != self.canvas:
-                canvas_x = self.canvas.winfo_x()
-                canvas_y = self.canvas.winfo_y()
-                canvas_event_x = event.x - canvas_x
-                canvas_event_y = event.y - canvas_y
-            else:
-                canvas_event_x = event.x
-                canvas_event_y = event.y
-        except:
-            return
-
-        img_width = int(self.original_width * self.user_zoom)
-        img_height = int(self.original_height * self.user_zoom)
-
-        if (self.image_x <= canvas_event_x <= self.image_x + img_width and
-                self.image_y <= canvas_event_y <= self.image_y + img_height):
-            self.panning = True
-            self.pan_start_x = canvas_event_x
-            self.pan_start_y = canvas_event_y
-            self.pan_start_image_x = self.image_x
-            self.pan_start_image_y = self.image_y
-            self.canvas.config(cursor="fleur")
-            return "break"
-
-    def on_pan(self, event):
-        if self.panning and self.image_loaded and self.user_zoom > 1.0:
-            try:
-                if event.widget != self.canvas:
-                    canvas_x = self.canvas.winfo_x()
-                    canvas_y = self.canvas.winfo_y()
-                    canvas_event_x = event.x - canvas_x
-                    canvas_event_y = event.y - canvas_y
-                else:
-                    canvas_event_x = event.x
-                    canvas_event_y = event.y
-            except:
-                return
-
-            dx = canvas_event_x - self.pan_start_x
-            dy = canvas_event_y - self.pan_start_y
-
-            new_x = self.pan_start_image_x + dx
-            new_y = self.pan_start_image_y + dy
-
-            img_width = int(self.original_width * self.user_zoom)
-            img_height = int(self.original_height * self.user_zoom)
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-
-            min_x = min(0, canvas_width - img_width)
-            max_x = max(0, canvas_width - img_width)
-            min_y = min(0, canvas_height - img_height)
-            max_y = max(0, canvas_height - img_height)
-
-            self.image_x = max(min(new_x, max_x), min_x)
-            self.image_y = max(min(new_y, max_y), min_y)
-
-            if self.current_image:
-                self.canvas.coords(self.current_image, self.image_x, self.image_y)
-
-            return "break"
-
-    def stop_pan(self, event):
-        self.panning = False
-        self.canvas.config(cursor="arrow")
 
     def position_away_from_main(self):
         try:
@@ -701,20 +1481,25 @@ class FloatingImage:
         self.master.geometry(f"+{mouse_x - self.window_width // 2}+{mouse_y - self.window_height // 2}")
 
     def create_context_menu(self):
+        """Создание контекстного меню"""
         self.context_menu = tk.Menu(self.master, tearoff=0, bg='#f0f0f0', fg='black')
-        self.context_menu.add_command(label="🖼️ Увеличить", command=self.zoom_in)
-        self.context_menu.add_command(label="🔍 Уменьшить", command=self.zoom_out)
-        self.context_menu.add_command(label="⟳ Сбросить зум", command=self.reset_zoom)
+        self.context_menu.add_command(label="🔍 Увеличить (+)", command=self.zoom_in)
+        self.context_menu.add_command(label="🔍 Уменьшить (-)", command=self.zoom_out)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="⟳ Сбросить окно", command=self.reset_window)  # Изменено
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="📐 Сохранять пропорции (Ctrl+A)", command=self.toggle_keep_aspect)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="📏 Оптимальный размер", command=self.reset_size)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="📋 Копировать путь", command=self.copy_path)
-        self.context_menu.add_command(label="🗑️ Закрыть", command=self.close)
+        self.context_menu.add_command(label="🗑️ Закрыть (Esc)", command=self.close)
 
         self.master.bind("<Button-3>", self.show_context_menu)
         self.canvas.bind("<Button-3>", self.show_context_menu)
 
     def show_context_menu(self, event):
+        """Показ контекстного меню"""
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -757,42 +1542,6 @@ class FloatingImage:
 
         self.loading_thread = threading.Thread(target=load, daemon=True)
         self.loading_thread.start()
-
-    def on_image_loaded(self, original_image):
-        self.original_image = original_image
-        self.original_width = self.original_image.width
-        self.original_height = self.original_image.height
-
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
-
-        max_width = min(self.original_width, int(screen_width * 0.6))
-        max_height = min(self.original_height, int(screen_height * 0.6))
-
-        if self.original_width > max_width or self.original_height > max_height:
-            ratio = min(max_width / self.original_width, max_height / self.original_height)
-            self.display_width = int(self.original_width * ratio)
-            self.display_height = int(self.original_height * ratio)
-            self.user_zoom = ratio
-        else:
-            self.display_width = self.original_width
-            self.display_height = self.original_height
-            self.user_zoom = 1.0
-
-        self.optimal_width = self.display_width
-        self.optimal_height = self.display_height
-
-        self.window_width = self.display_width
-        self.window_height = self.display_height
-        self.master.geometry(f"{self.window_width}x{self.window_height}")
-
-        self.update_canvas_size()
-        self.update_image()
-
-        self.hide_loading_indicator()
-        self.image_loaded = True
-
-        self.update_borders_position()
 
     def on_image_load_error(self, error_msg):
         self.hide_loading_indicator()
@@ -913,20 +1662,10 @@ class FloatingImage:
             frame.bind("<Button-1>", self.start_resize)
             frame.bind("<B1-Motion>", self.on_resize)
             frame.bind("<ButtonRelease-1>", self.stop_resize)
-            frame.bind("<Shift-Button-1>", self.start_resize_with_shift)
-            frame.bind("<Control-Button-1>", self.start_resize_with_ctrl)
+            frame.bind("<Shift-Button-1>", lambda e: setattr(self, 'resize_with_shift', True) or self.start_resize(e))
+            frame.bind("<Control-Button-1>", lambda e: setattr(self, 'resize_with_ctrl', True) or self.start_resize(e))
 
         self.hide_resize_borders()
-
-    def start_resize_with_shift(self, event):
-        self.resize_with_shift = True
-        self.resize_with_ctrl = False
-        self.start_resize(event)
-
-    def start_resize_with_ctrl(self, event):
-        self.resize_with_shift = False
-        self.resize_with_ctrl = True
-        self.start_resize(event)
 
     def show_resize_borders(self):
         if not hasattr(self, 'top_frame'):
@@ -971,199 +1710,12 @@ class FloatingImage:
             if frame:
                 frame.place_forget()
 
-    def start_resize(self, event):
-        widget = event.widget
-        if widget == self.top_frame:
-            self.resize_edge = 'top'
-        elif widget == self.bottom_frame:
-            self.resize_edge = 'bottom'
-        elif widget == self.left_frame:
-            self.resize_edge = 'left'
-        elif widget == self.right_frame:
-            self.resize_edge = 'right'
-        elif widget == self.top_left:
-            self.resize_edge = 'top_left'
-        elif widget == self.top_right:
-            self.resize_edge = 'top_right'
-        elif widget == self.bottom_left:
-            self.resize_edge = 'bottom_left'
-        elif widget == self.bottom_right:
-            self.resize_edge = 'bottom_right'
-
-        self.resizing = True
-        self.resize_start_x = self.master.winfo_pointerx()
-        self.resize_start_y = self.master.winfo_pointery()
-        self.resize_start_width = self.master.winfo_width()
-        self.resize_start_height = self.master.winfo_height()
-        self.resize_start_left = self.master.winfo_x()
-        self.resize_start_top = self.master.winfo_y()
-
-        if self.image_loaded:
-            self.original_aspect_ratio = self.original_width / self.original_height
-
-    def on_resize(self, event):
-        if not self.resizing or not self.image_loaded:
-            return
-
-        current_x = self.master.winfo_pointerx()
-        current_y = self.master.winfo_pointery()
-        delta_x = current_x - self.resize_start_x
-        delta_y = current_y - self.resize_start_y
-
-        new_width = self.resize_start_width
-        new_height = self.resize_start_height
-        new_x = self.resize_start_left
-        new_y = self.resize_start_top
-
-        min_width = 50
-        min_height = 50
-
-        if self.resize_edge == 'right':
-            new_width = max(min_width, self.resize_start_width + delta_x)
-        elif self.resize_edge == 'left':
-            new_width = max(min_width, self.resize_start_width - delta_x)
-            new_x = self.resize_start_left + (self.resize_start_width - new_width)
-        elif self.resize_edge == 'bottom':
-            new_height = max(min_height, self.resize_start_height + delta_y)
-        elif self.resize_edge == 'top':
-            new_height = max(min_height, self.resize_start_height - delta_y)
-            new_y = self.resize_start_top + (self.resize_start_height - new_height)
-        elif self.resize_edge == 'top_left':
-            new_width = max(min_width, self.resize_start_width - delta_x)
-            new_x = self.resize_start_left + (self.resize_start_width - new_width)
-            new_height = max(min_height, self.resize_start_height - delta_y)
-            new_y = self.resize_start_top + (self.resize_start_height - new_height)
-        elif self.resize_edge == 'top_right':
-            new_width = max(min_width, self.resize_start_width + delta_x)
-            new_height = max(min_height, self.resize_start_height - delta_y)
-            new_y = self.resize_start_top + (self.resize_start_height - new_height)
-        elif self.resize_edge == 'bottom_left':
-            new_width = max(min_width, self.resize_start_width - delta_x)
-            new_x = self.resize_start_left + (self.resize_start_width - new_width)
-            new_height = max(min_height, self.resize_start_height + delta_y)
-        elif self.resize_edge == 'bottom_right':
-            new_width = max(min_width, self.resize_start_width + delta_x)
-            new_height = max(min_height, self.resize_start_height + delta_y)
-
-        if self.resize_with_shift:
-            aspect_ratio = self.original_width / self.original_height
-
-            if self.resize_edge in ['left', 'right']:
-                target_width = new_width
-                target_height = int(target_width / aspect_ratio)
-            elif self.resize_edge in ['top', 'bottom']:
-                target_height = new_height
-                target_width = int(target_height * aspect_ratio)
-            else:
-                width_change = abs(new_width - self.resize_start_width)
-                height_change = abs(new_height - self.resize_start_height)
-                if width_change >= height_change:
-                    target_width = new_width
-                    target_height = int(target_width / aspect_ratio)
-                else:
-                    target_height = new_height
-                    target_width = int(target_height * aspect_ratio)
-
-            if target_width < min_width:
-                target_width = min_width
-                target_height = int(target_width / aspect_ratio)
-            if target_height < min_height:
-                target_height = min_height
-                target_width = int(target_height * aspect_ratio)
-
-            if self.resize_edge in ['top', 'top_left', 'top_right']:
-                new_y = self.resize_start_top + (self.resize_start_height - target_height)
-            if self.resize_edge in ['left', 'top_left', 'bottom_left']:
-                new_x = self.resize_start_left + (self.resize_start_width - target_width)
-
-            self.master.geometry(f"{target_width}x{target_height}+{new_x}+{new_y}")
-
-            self.window_width = target_width
-            self.window_height = target_height
-            self.user_zoom = target_width / self.original_width
-            self.stretch_mode = False
-
-            self.update_borders_position()
-            self.update_image()
-            return
-
-        elif self.resize_with_ctrl:
-            self.master.geometry(f"{new_width}x{new_height}+{new_x}+{new_y}")
-            self.window_width = new_width
-            self.window_height = new_height
-            self.stretch_mode = False
-            self.update_borders_position()
-        else:
-            self.master.geometry(f"{new_width}x{new_height}+{new_x}+{new_y}")
-            self.window_width = new_width
-            self.window_height = new_height
-            self.stretch_mode = True
-            self.stretch_width = new_width
-            self.stretch_height = new_height
-            self.user_zoom = 1.0
-
-            self.update_borders_position()
-            self.update_image()
-
-    def update_image(self):
-        if not self.image_loaded:
-            return
-
-        try:
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-
-            if canvas_width <= 0 or canvas_height <= 0:
-                canvas_width = self.window_width
-                canvas_height = self.window_height
-
-            if self.stretch_mode and self.stretch_width > 0 and self.stretch_height > 0:
-                img_width = self.stretch_width
-                img_height = self.stretch_height
-            else:
-                img_width = int(self.original_width * self.user_zoom)
-                img_height = int(self.original_height * self.user_zoom)
-
-            if img_width > 0 and img_height > 0:
-                pil_image = self.get_scaled_image(img_width, img_height)
-                if pil_image:
-                    self.photo_image = ImageTk.PhotoImage(pil_image)
-                    self.canvas.delete("all")
-
-                    self.image_x = (canvas_width - img_width) // 2
-                    self.image_y = (canvas_height - img_height) // 2
-
-                    self.current_image = self.canvas.create_image(self.image_x, self.image_y, anchor=tk.NW,
-                                                                  image=self.photo_image)
-
-        except Exception as e:
-            print(f"Ошибка обновления: {e}")
-
     def update_canvas_size(self):
         """Обновляет размер canvas"""
         width = self.master.winfo_width()
         height = self.master.winfo_height()
         if width > 0 and height > 0:
             self.canvas.config(width=width, height=height)
-
-    def stop_resize(self, event):
-        self.resizing = False
-        self.resize_edge = None
-        self.resize_with_shift = False
-        self.resize_with_ctrl = False
-
-        if self.stretch_mode:
-            self.optimal_width = self.window_width
-            self.optimal_height = self.window_height
-
-    def exit_stretch_mode(self):
-        if self.stretch_mode:
-            self.stretch_mode = False
-            self.stretch_width = 0
-            self.stretch_height = 0
-            if self.window_width > 0 and self.original_width > 0:
-                self.user_zoom = self.window_width / self.original_width
-            self.update_image()
 
     def update_borders_position(self):
         if not self.mouse_over:
@@ -1184,86 +1736,6 @@ class FloatingImage:
             self.bottom_left.place(x=0, y=current_height - corner_size, width=corner_size, height=corner_size)
             self.bottom_right.place(x=current_width - corner_size, y=current_height - corner_size,
                                     width=corner_size, height=corner_size)
-
-    def on_mousewheel_zoom(self, event):
-        if not self.image_loaded:
-            return "break"
-
-        if event.state & 0x0001:
-            zoom_step = self.zoom_step_fast
-        elif event.state & 0x0004:
-            zoom_step = self.zoom_step_slow
-        else:
-            zoom_step = self.zoom_step_normal
-
-        if event.delta > 0:
-            factor = zoom_step
-        else:
-            factor = 1.0 / zoom_step
-
-        new_zoom = self.user_zoom * factor
-        if new_zoom < self.min_zoom:
-            new_zoom = self.min_zoom
-        if new_zoom > self.max_zoom:
-            new_zoom = self.max_zoom
-
-        if new_zoom == self.user_zoom:
-            return "break"
-
-        cursor_x = event.x
-        cursor_y = event.y
-
-        old_width = int(self.original_width * self.user_zoom)
-        old_height = int(self.original_height * self.user_zoom)
-
-        if old_width > 0 and old_height > 0:
-            if (self.image_x <= cursor_x <= self.image_x + old_width and
-                    self.image_y <= cursor_y <= self.image_y + old_height):
-                rel_x = (cursor_x - self.image_x) / old_width
-                rel_y = (cursor_y - self.image_y) / old_height
-            else:
-                rel_x = 0.5
-                rel_y = 0.5
-        else:
-            rel_x = 0.5
-            rel_y = 0.5
-
-        self.user_zoom = new_zoom
-
-        new_width = int(self.original_width * self.user_zoom)
-        new_height = int(self.original_height * self.user_zoom)
-
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-
-        new_x = cursor_x - (rel_x * new_width)
-        new_y = cursor_y - (rel_y * new_height)
-
-        if new_width >= canvas_width:
-            new_x = max(min(new_x, 0), canvas_width - new_width)
-        else:
-            new_x = (canvas_width - new_width) // 2
-
-        if new_height >= canvas_height:
-            new_y = max(min(new_y, 0), canvas_height - new_height)
-        else:
-            new_y = (canvas_height - new_height) // 2
-
-        self.image_x = new_x
-        self.image_y = new_y
-
-        self.update_zoomed_image(new_width, new_height)
-
-        return "break"
-
-    def update_zoomed_image(self, width, height):
-        if width > 0 and height > 0:
-            pil_image = self.get_scaled_image(width, height)
-            if pil_image:
-                self.photo_image = ImageTk.PhotoImage(pil_image)
-                self.canvas.delete("all")
-                self.current_image = self.canvas.create_image(self.image_x, self.image_y, anchor=tk.NW,
-                                                              image=self.photo_image)
 
     def on_global_press(self, event):
         if event.widget == self.title_frame or event.widget in self.title_frame.winfo_children():
@@ -1306,88 +1778,23 @@ class FloatingImage:
             self.reset_zoom()
             return "break"
 
-    def on_canvas_configure(self, event):
-        if self.image_loaded:
-            self.update_canvas_size()
-            img_width = int(self.original_width * self.user_zoom)
-            img_height = int(self.original_height * self.user_zoom)
-            canvas_width = event.width
-            canvas_height = event.height
-
-            if img_width <= canvas_width:
-                self.image_x = (canvas_width - img_width) // 2
-            else:
-                self.image_x = max(min(self.image_x, 0), canvas_width - img_width)
-
-            if img_height <= canvas_height:
-                self.image_y = (canvas_height - img_height) // 2
-            else:
-                self.image_y = max(min(self.image_y, 0), canvas_height - img_height)
-
-            self.update_zoomed_image(img_width, img_height)
-
-    @lru_cache(maxsize=32)
-    def get_scaled_image(self, width, height):
-        if width > 0 and height > 0:
-            return self.original_image.resize((width, height), Image.Resampling.LANCZOS)
-        return None
-
-    def zoom_in(self):
-        if self.image_loaded and self.user_zoom < self.max_zoom:
-            class FakeEvent:
-                def __init__(self):
-                    self.delta = 120
-                    self.state = 0
-                    self.x = self.canvas.winfo_width() // 2
-                    self.y = self.canvas.winfo_height() // 2
-
-            fake_event = FakeEvent()
-            self.on_mousewheel_zoom(fake_event)
-
-    def zoom_out(self):
-        if self.image_loaded and self.user_zoom > self.min_zoom:
-            class FakeEvent:
-                def __init__(self):
-                    self.delta = -120
-                    self.state = 0
-                    self.x = self.canvas.winfo_width() // 2
-                    self.y = self.canvas.winfo_height() // 2
-
-            fake_event = FakeEvent()
-            self.on_mousewheel_zoom(fake_event)
-
-    def reset_zoom(self):
-        if self.image_loaded:
-            self.user_zoom = 1.0
-
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            img_width = self.original_width
-            img_height = self.original_height
-
-            self.image_x = (canvas_width - img_width) // 2
-            self.image_y = (canvas_height - img_height) // 2
-
-            self.update_zoomed_image(img_width, img_height)
-            self.show_tooltip("✅ Зум сброшен", 1000)
-
     def reset_size(self):
+        """Сброс размера окна и зума"""
         if hasattr(self, 'optimal_width') and hasattr(self, 'optimal_height'):
             current_x = self.master.winfo_x()
             current_y = self.master.winfo_y()
             self.window_width = self.optimal_width
             self.window_height = self.optimal_height
-            self.stretch_mode = False
-            self.user_zoom = self.optimal_width / self.original_width
+
+            self.user_zoom = 1.0
+
             self.master.geometry(f"{self.window_width}x{self.window_height}+{current_x}+{current_y}")
             self.update_borders_position()
+
             if self.image_loaded:
                 self.update_image()
 
     def close(self):
-        if hasattr(self, 'get_scaled_image'):
-            self.get_scaled_image.cache_clear()
-
         if hasattr(self, 'parent_gallery') and self.parent_gallery:
             try:
                 self.parent_gallery.on_floating_window_close(self)
@@ -1433,20 +1840,6 @@ class ImageGallery:
         # Фокус на главное окно
         self.root.focus_force()
 
-    def open_app_folder(self):
-        """Открывает папку с данными приложения (My Documents/floating_images)"""
-        try:
-            if APP_DIR.exists():
-                os.startfile(str(APP_DIR))
-                self.info_label.config(text=f"📂 Открыта папка: {APP_DIR}")
-            else:
-                # Если папки нет, создаем и открываем
-                ensure_app_directories()
-                os.startfile(str(APP_DIR))
-                self.info_label.config(text=f"📂 Папка создана и открыта: {APP_DIR}")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть папку\n{str(e)}")
-
     def toggle_all_windows(self, event=None):
         """Скрыть или показать все окна с картинками"""
         # Очищаем список от закрытых окон
@@ -1462,13 +1855,13 @@ class ImageGallery:
             for window in self.windows:
                 try:
                     if hasattr(window, 'master') and window.master.winfo_exists():
-                        window.master.deiconify()
-                        window.master.lift()
+                        window.master.deiconify()  # Восстанавливаем окно
+                        window.master.lift()  # Поднимаем на передний план
                         # Обновляем содержимое
-                        if hasattr(window, 'update_canvas_size'):
-                            window.update_canvas_size()
                         if hasattr(window, 'update_image'):
                             window.update_image()
+                        if hasattr(window, 'update_canvas_size'):
+                            window.update_canvas_size()
                         shown += 1
                 except Exception as e:
                     print(f"Ошибка при показе окна: {e}")
@@ -1480,62 +1873,83 @@ class ImageGallery:
             for window in self.windows:
                 try:
                     if hasattr(window, 'master') and window.master.winfo_exists():
-                        window.master.withdraw()
+                        window.master.withdraw()  # Скрываем окно
                         hidden += 1
                 except Exception as e:
                     print(f"Ошибка при скрытии окна: {e}")
             self.all_windows_hidden = True
             self.info_label.config(text=f"👁️ Скрыто {hidden} окон (нажмите H для показа)")
 
+    def open_app_folder(self):
+        """Открывает папку с данными приложения (My Documents/floating_images)"""
+        try:
+            if APP_DIR.exists():
+                os.startfile(str(APP_DIR))
+                self.info_label.config(text=f"📂 Открыта папка: {APP_DIR}")
+            else:
+                # Если папки нет, создаем и открываем
+                ensure_app_directories()
+                os.startfile(str(APP_DIR))
+                self.info_label.config(text=f"📂 Папка создана и открыта: {APP_DIR}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть папку\n{str(e)}")
+
     def setup_hotkeys(self):
         def handle_hotkey(event):
-            # Проверяем физическую клавишу по keycode (код физической клавиши)
-            # Код 72 - это физическая клавиша 'H' на большинстве клавиатур
-            # В английской раскладке это 'H', в русской - 'Р'
-            if event.keycode == 72:  # Физическая клавиша H (она же Р в русской раскладке)
-                # Проверяем, что не нажаты модификаторы (Ctrl, Alt, Shift)
-                if not (event.state & 0x4 or event.state & 0x1 or event.state & 0x20000):
-                    self.toggle_all_windows(event)
-                    return "break"
+            # Получаем код клавиши (одинаковый для всех раскладок)
+            keycode = event.keycode
 
-            # Также проверяем по символу для обратной совместимости
-            if event.keysym.lower() in ('h', 'р'):  # Добавляем русскую 'р'
-                if not (event.state & 0x4 or event.state & 0x1 or event.state & 0x20000):
-                    self.toggle_all_windows(event)
-                    return "break"
+            # H или ь (русская раскладка)
+            if keycode in (72, 56) and not (event.state & 0x4 or event.state & 0x1 or event.state & 0x20000):
+                self.toggle_all_windows(event)
+                return "break"
 
-            # Остальные горячие клавиши
-            if event.state & 0x4 and event.keycode == 86:  # Ctrl+V
+            # Ctrl+V (код 86)
+            if event.state & 0x4 and keycode == 86:
                 self.paste_from_clipboard()
                 return "break"
-            elif event.state & 0x4 and event.keycode == 79:  # Ctrl+O
+
+            # Ctrl+O (код 79)
+            if event.state & 0x4 and keycode == 79:
                 self.open_images()
                 return "break"
-            elif event.state & 0x4 and event.keycode == 65:  # Ctrl+A
+
+            # Ctrl+A (код 65)
+            if event.state & 0x4 and keycode == 65:
                 self.show_all()
                 return "break"
-            elif event.state & 0x4 and event.keycode == 83:  # Ctrl+S
+
+            # Ctrl+S (код 83)
+            if event.state & 0x4 and keycode == 83:
                 self.open_settings()
                 return "break"
-            elif event.state & 0x4 and event.keycode == 87:  # Ctrl+W
+
+            # Ctrl+W (код 87)
+            if event.state & 0x4 and keycode == 87:
                 self.close_all()
                 return "break"
-            elif event.state & 0x4 and event.keycode == 81:  # Ctrl+Q
+
+            # Ctrl+Q (код 81)
+            if event.state & 0x4 and keycode == 81:
                 self.on_close()
                 return "break"
-            elif event.keycode == 46:  # Delete
+
+            # Delete (код 46)
+            if keycode == 46:
                 self.remove_selected()
                 return "break"
-            elif event.keysym == 'F1':
+
+            # F1 (код 112)
+            if keycode == 112:
                 self.open_settings()
                 return "break"
-            elif event.keysym == 'Escape':
-                if self.windows:
-                    self.close_all()
+
+            # Escape (код 27)
+            if keycode == 27 and self.windows:
+                self.close_all()
                 return "break"
 
         self.root.bind_all("<Key>", handle_hotkey)
-        self.image_listbox.bind("<Key>", handle_hotkey)
         self.root.focus_force()
 
     def save_gallery(self):
