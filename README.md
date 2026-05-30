@@ -44,35 +44,6 @@
 
 ---
 
-## 📥 Установка из исходников (для разработчиков)
-
-### Требования
-- Python 3.8 или выше
-- Библиотека Pillow
-
-```bash
-pip install Pillow
-```
-
-### Запуск из исходников
-
-```bash
-git clone https://github.com/your-username/floating-images-manager.git
-cd floating-images-manager
-python main.py
-```
-
-### Самостоятельная сборка EXE
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "FloatingImagesManager" main.py
-```
-
-Готовый EXE файл появится в папке `dist/`
-
----
-
 ## 🎮 Использование
 
 ### Главное окно галереи
