@@ -15,7 +15,7 @@
 
 **For Windows users** — a ready-made EXE file is available, no Python installation required:
 
-➡️ **[Download the latest version](https://github.com/your-username/floating-images-manager/releases/latest)**
+➡️ **[Download the latest version](https://github.com/AlexeyZam15/Floating-Images-Manager/releases/latest)**
 
 1. Go to the **Releases** section on GitHub
 2. Download the `FloatingImagesManager.exe` file
