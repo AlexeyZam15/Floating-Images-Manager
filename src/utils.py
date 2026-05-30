@@ -1,12 +1,20 @@
 # src/utils.py
+
 import json
 import shutil
 from pathlib import Path
 from src.constants import CONFIG_DIR, CONFIG_FILE, GALLERY_FILE, STORAGE_DIR, APP_DIR
+import sys
+import os
 
 
 def ensure_app_directories():
-    """Создает все необходимые папки приложения в My Documents/floating_images"""
+    """
+    Создает все необходимые папки приложения в My Documents/floating_images.
+
+    Возвращает:
+        bool: True если папки успешно созданы, False в случае ошибки
+    """
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -18,14 +26,23 @@ def ensure_app_directories():
 
 
 def migrate_old_files():
-    """Переносит старые файлы из старой папки в новую в My Documents/floating_images"""
-    old_config_dir = Path(__file__).parent.parent / "config"
-    old_storage_dir = Path(__file__).parent.parent / "storage"
+    """
+    Переносит старые файлы из старой папки (рядом с EXE) в новую в My Documents/floating_images.
+
+    Возвращает:
+        bool: True если были перенесены какие-либо файлы, False если ничего не перенесено
+    """
+    if getattr(sys, 'frozen', False):
+        exe_dir = Path(os.path.dirname(sys.executable))
+        old_config_dir = exe_dir / "config"
+        old_storage_dir = exe_dir / "storage"
+    else:
+        old_config_dir = Path(__file__).parent.parent / "config"
+        old_storage_dir = Path(__file__).parent.parent / "storage"
 
     ensure_app_directories()
     migrated = False
 
-    # Переносим файл настроек
     old_config_file = old_config_dir / "settings.json"
     if old_config_file.exists():
         try:
@@ -35,7 +52,6 @@ def migrate_old_files():
         except Exception as e:
             print(f"Ошибка переноса настроек: {e}")
 
-    # Переносим файл галереи
     old_gallery_file = old_config_dir / "gallery.json"
     if old_gallery_file.exists():
         try:
@@ -45,7 +61,6 @@ def migrate_old_files():
         except Exception as e:
             print(f"Ошибка переноса галереи: {e}")
 
-    # Переносим файлы из storage
     if old_storage_dir.exists():
         try:
             for old_file in old_storage_dir.glob("*"):

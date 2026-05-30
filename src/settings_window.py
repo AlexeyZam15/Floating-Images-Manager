@@ -65,8 +65,8 @@ class SettingsWindow:
 
     def save_settings(self):
         """
-        Сохраняет все настройки и при изменении языка инициирует корректный перезапуск.
-        Без изменения языка просто закрывает окно настроек и применяет изменения.
+        Сохраняет все настройки и при изменении языка обновляет интерфейс без перезапуска.
+        Только сохраняет настройки и уведомляет главное окно о необходимости обновить UI.
         """
         old_lang = self.settings.get_language()
         new_lang = self.language_var.get()
@@ -87,18 +87,18 @@ class SettingsWindow:
             self.settings.set_language(new_lang)
             self.settings.save()
 
-            # Предлагаем перезапустить программу
-            result = messagebox.askyesno(
+            # Обновляем интерфейс главного окна
+            if hasattr(self, 'gallery') and self.gallery:
+                if hasattr(self.gallery, 'update_ui_language'):
+                    self.gallery.update_ui_language()
+
+            # Показываем уведомление об успешной смене языка
+            messagebox.showinfo(
                 self.get_string('settings_title'),
-                self.get_string('language_changed')
+                self.get_string('settings_saved')
             )
 
-            if result:
-                # Вызываем перезапуск (он сам уничтожит все окна и завершит процесс)
-                self.restart_app()
-            else:
-                # Не перезапускаем, просто закрываем окно настроек
-                self.window.destroy()
+            self.window.destroy()
         else:
             # Язык не изменился - просто применяем настройки
             if self.on_settings_changed:
@@ -112,97 +112,52 @@ class SettingsWindow:
 
     def restart_app(self):
         """
-        Перезапускает приложение, корректно передавая пути к модулям encodings.
-        Использует отдельный скрипт-загрузчик для обхода ограничений PyInstaller.
+        Перезапускает приложение после смены языка.
+        Использует прямой вызов процесса без BAT-файлов.
         """
         import subprocess
         import sys
         import os
         import time
-        import tempfile
 
-        # Сохраняем настройки перед перезапуском
         self.settings.save()
 
-        # Сохраняем галерею через родительский объект
         if hasattr(self, 'gallery') and self.gallery:
             try:
                 if hasattr(self.gallery, 'save_gallery'):
                     self.gallery.save_gallery()
+                if hasattr(self.gallery, 'close_all'):
+                    self.gallery.close_all()
             except:
                 pass
 
-        # Определяем путь к исполняемому файлу
         if getattr(sys, 'frozen', False):
-            # Запущено как exe
             executable_path = sys.executable
 
-            # Создаем временный BAT-файл для запуска с правильным окружением
-            bat_file = tempfile.NamedTemporaryFile(mode='w', suffix='.bat', delete=False)
-
-            # Устанавливаем переменные окружения для encodings
-            env_vars = []
-            if hasattr(sys, '_MEIPASS'):
-                meipass = sys._MEIPASS
-                env_vars.append(f'SET PYTHONPATH={meipass}')
-                env_vars.append(f'SET PATH={meipass};%PATH%')
-
-            # Записываем команды в BAT-файл
-            bat_content = '@echo off\n'
-            bat_content += '\n'.join(env_vars)
-            bat_content += f'\nSTART "" "{executable_path}"\n'
-            bat_content += f'\nTIMEOUT /T 1 /NOBREAK > NUL\n'
-            bat_content += f'\nEXIT\n'
-
-            bat_file.write(bat_content)
-            bat_file.close()
-
-            # Запускаем BAT-файл
             if sys.platform == 'win32':
                 subprocess.Popen(
-                    [bat_file.name],
+                    [executable_path],
                     creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    shell=True
+                    shell=False
                 )
             else:
-                subprocess.Popen([bat_file.name], shell=True)
-
-            # Удаляем BAT-файл через 2 секунды
-            def cleanup_bat():
-                try:
-                    time.sleep(2)
-                    os.unlink(bat_file.name)
-                except:
-                    pass
-
-            threading.Thread(target=cleanup_bat, daemon=True).start()
-
+                subprocess.Popen([executable_path])
         else:
-            # Запущено как скрипт Python
             script_path = os.path.abspath(sys.argv[0])
-            args = [sys.executable, script_path] + sys.argv[1:]
-            env = os.environ.copy()
-
             if sys.platform == 'win32':
                 subprocess.Popen(
-                    args,
-                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    env=env
+                    [sys.executable, script_path],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
                 )
             else:
-                subprocess.Popen(args, env=env)
+                subprocess.Popen([sys.executable, script_path])
 
-        # Даем время на запуск нового процесса
         time.sleep(0.5)
 
-        # Закрываем окно настроек
         self.window.destroy()
 
-        # Закрываем все окна через галерею
         if hasattr(self, 'gallery') and self.gallery:
             try:
-                if hasattr(self.gallery, 'close_all'):
-                    self.gallery.close_all()
                 if hasattr(self.gallery, 'root'):
                     self.gallery.root.quit()
                     self.gallery.root.destroy()
@@ -215,7 +170,6 @@ class SettingsWindow:
             except:
                 pass
 
-        # Завершаем текущий процесс
         os._exit(0)
 
     def get_string(self, key):
