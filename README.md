@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
   
 # 🖼️ Floating Images Manager
@@ -205,4 +204,3 @@ Documents/floating_images/
 **⭐ Поставьте звезду проекту, если он вам полезен!**
 
 </div>
-```
