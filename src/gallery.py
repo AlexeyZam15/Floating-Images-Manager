@@ -12,7 +12,80 @@ from src.constants import GALLERY_FILE, STORAGE_DIR, APP_DIR
 from src.settings import Settings
 from src.settings_window import SettingsWindow
 from src.floating_image import FloatingImage
-from src.utils import ensure_app_directories
+
+
+def ensure_app_directories():
+    """
+    Создает все необходимые папки приложения в My Documents/floating_images.
+    Дублирует функцию из utils.py для избежания циклического импорта.
+
+    Возвращает:
+        bool: True если папки успешно созданы, False в случае ошибки
+    """
+    try:
+        from src.constants import CONFIG_DIR, STORAGE_DIR, APP_DIR
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"Папки созданы в: {APP_DIR}")
+        return True
+    except Exception as e:
+        print(f"Ошибка создания папок: {e}")
+        return False
+
+
+def migrate_old_files():
+    """
+    Переносит старые файлы из старой папки в новую в My Documents/floating_images.
+    Дублирует функцию из utils.py для избежания циклического импорта.
+
+    Возвращает:
+        bool: True если были перенесены какие-либо файлы, False если ничего не перенесено
+    """
+    import sys
+    import shutil
+
+    if getattr(sys, 'frozen', False):
+        exe_dir = Path(os.path.dirname(sys.executable))
+        old_config_dir = exe_dir / "config"
+        old_storage_dir = exe_dir / "storage"
+    else:
+        old_config_dir = Path(__file__).parent.parent / "config"
+        old_storage_dir = Path(__file__).parent.parent / "storage"
+
+    ensure_app_directories()
+    migrated = False
+
+    old_config_file = old_config_dir / "settings.json"
+    if old_config_file.exists():
+        try:
+            shutil.copy2(old_config_file, GALLERY_FILE.parent / "settings.json")
+            print(f"Перенесен файл настроек: {old_config_file}")
+            migrated = True
+        except Exception as e:
+            print(f"Ошибка переноса настроек: {e}")
+
+    old_gallery_file = old_config_dir / "gallery.json"
+    if old_gallery_file.exists():
+        try:
+            shutil.copy2(old_gallery_file, GALLERY_FILE)
+            print(f"Перенесен файл галереи: {old_gallery_file}")
+            migrated = True
+        except Exception as e:
+            print(f"Ошибка переноса галереи: {e}")
+
+    if old_storage_dir.exists():
+        try:
+            for old_file in old_storage_dir.glob("*"):
+                if old_file.is_file():
+                    new_file = STORAGE_DIR / old_file.name
+                    if not new_file.exists():
+                        shutil.copy2(old_file, new_file)
+                        print(f"Перенесен файл: {old_file.name}")
+                        migrated = True
+        except Exception as e:
+            print(f"Ошибка переноса файлов storage: {e}")
+
+    return migrated
 
 
 class ImageGallery:
@@ -48,23 +121,27 @@ class ImageGallery:
 
         self.root.focus_force()
 
-    def show_tooltip(self, event, text):
-        """Показывает всплывающую подсказку при наведении на кнопку панели инструментов.
+    def show_tooltip(self, event, text_key):
+        """
+        Показывает всплывающую подсказку при наведении на кнопку панели инструментов.
+        Текст подсказки запрашивается динамически по ключу для поддержки смены языка.
 
         Аргументы:
             event: событие наведения мыши
-            text: текст подсказки
+            text_key: ключ строки в словаре локализации
         """
+        # Получаем актуальный текст подсказки по ключу на текущем языке
+        tooltip_text = self.get_string(text_key)
+
         self.tooltip = tk.Toplevel(self.root)
         self.tooltip.wm_overrideredirect(True)
 
-        # Получаем координаты кнопки
         x = event.widget.winfo_rootx() + event.widget.winfo_width() // 2
         y = event.widget.winfo_rooty() + event.widget.winfo_height() + 5
 
         self.tooltip.wm_geometry(f"+{x - 50}+{y}")
 
-        label = tk.Label(self.tooltip, text=text, bg='#ffffcc', fg='black',
+        label = tk.Label(self.tooltip, text=tooltip_text, bg='#ffffcc', fg='black',
                          padx=8, pady=4, font=('Segoe UI', 9),
                          relief='solid', borderwidth=1)
         label.pack()
@@ -81,69 +158,130 @@ class ImageGallery:
 
     def toggle_language(self):
         """
-        Переключает язык между русским и английским с последующим перезапуском приложения.
-        Кнопка вызывает этот метод для смены языка.
+        Переключает язык между русским и английским с немедленным обновлением интерфейса.
+        Обновляет все тексты в главном окне, меню, панели инструментов и информационных надписях.
         """
         current_lang = self.settings.get_language()
         new_lang = "en" if current_lang == "ru" else "ru"
         self.settings.set_language(new_lang)
 
-        # Показываем сообщение о смене языка
-        messagebox.showinfo(
-            self.get_string('settings_title'),
-            self.get_string('language_changed')
-        )
+        # Обновляем все тексты в главном окне
+        self.update_ui_language()
 
-        # Перезапускаем приложение
-        self.restart_app()
+        # Обновляем текст кнопки переключения языка
+        lang_button_text = "EN" if new_lang == "ru" else "RU"
+        self.lang_button.config(text=lang_button_text)
+
+        self.info_label.config(
+            text=self.get_string('ready') + "\n" + self.get_string('data_folder') + " " + str(APP_DIR))
+
+        # Обновляем все открытые плавающие окна
+        for window in self.windows:
+            try:
+                if hasattr(window, 'master') and window.master.winfo_exists():
+                    # Обновляем заголовок окна
+                    if hasattr(window, 'title_label'):
+                        filename = os.path.basename(window.image_path)
+                        if len(filename) > 40:
+                            filename = filename[:37] + "..."
+                        window.title_label.config(text=filename)
+                    # Обновляем контекстное меню
+                    if hasattr(window, 'context_menu'):
+                        window.update_context_menu_language()
+            except Exception as e:
+                print(f"Ошибка обновления языка в плавающем окне: {e}")
+
+    def update_ui_language(self):
+        """
+        Обновляет все тексты пользовательского интерфейса главного окна на текущем языке.
+        Пересоздает меню и обновляет тексты статических виджетов.
+        Всплывающие подсказки обновляются автоматически при наведении,
+        так как они запрашивают актуальный текст по ключу.
+        """
+        # Обновляем заголовок окна
+        self.root.title(self.get_string('app_title'))
+
+        # Пересоздаем меню (проще чем обновлять каждый пункт)
+        self.create_menu()
+
+        # Обновляем текст кнопки переключения языка
+        current_lang = self.settings.get_language()
+        lang_button_text = "EN" if current_lang == "ru" else "RU"
+        self.lang_button.config(text=lang_button_text)
+
+        # Обновляем информационную метку внизу окна
+        self.info_label.config(
+            text=self.get_string('ready') + "\n" + self.get_string('data_folder') + " " + str(APP_DIR))
+
+        # Обновляем все открытые плавающие окна
+        for window in self.windows:
+            try:
+                if hasattr(window, 'master') and window.master.winfo_exists():
+                    # Обновляем заголовок окна
+                    if hasattr(window, 'title_label'):
+                        filename = os.path.basename(window.image_path)
+                        if len(filename) > 40:
+                            filename = filename[:37] + "..."
+                        window.title_label.config(text=filename)
+                    # Обновляем контекстное меню плавающего окна
+                    if hasattr(window, 'context_menu'):
+                        window.update_context_menu_language()
+            except Exception as e:
+                print(f"Ошибка обновления языка в плавающем окне: {e}")
+
+    def update_button_tooltip(self, button, tooltip_key):
+        """
+        Обновляет текст всплывающей подсказки для указанной кнопки.
+
+        Аргументы:
+            button: кнопка, для которой обновляется подсказка
+            tooltip_key: ключ в словаре локализации для получения текста подсказки
+        """
+        tooltip_text = self.get_string(tooltip_key)
+        # Удаляем старые привязки и создаем новые
+        for binding in button.bind_sequences():
+            if binding in ('<Enter>', '<Leave>'):
+                button.unbind(binding)
+        button.bind("<Enter>", lambda e, t=tooltip_text: self.show_tooltip(e, t))
+        button.bind("<Leave>", self.hide_tooltip)
 
     def restart_app(self):
         """
         Перезапускает приложение, сохраняя настройки и закрывая все окна.
         Запускает новый процесс перед завершением текущего.
-        Исправляет ошибку с encodings при переключении языка.
+        Использует прямой вызов без BAT-файлов.
         """
         import subprocess
         import sys
         import os
         import time
 
-        # Сохраняем настройки и галерею перед перезапуском
         self.settings.save()
         self.save_gallery()
-
-        # Определяем способ запуска (exe или скрипт)
-        if getattr(sys, 'frozen', False):
-            executable_path = sys.executable
-            args = [executable_path]
-
-            # Устанавливаем переменные окружения для encodings
-            env = os.environ.copy()
-            if hasattr(sys, '_MEIPASS'):
-                env['PYTHONPATH'] = sys._MEIPASS
-                env['PATH'] = sys._MEIPASS + os.pathsep + env.get('PATH', '')
-        else:
-            script_path = os.path.abspath(sys.argv[0])
-            args = [sys.executable, script_path] + sys.argv[1:]
-            env = os.environ.copy()
-
-        # Запускаем новый процесс
-        if sys.platform == 'win32':
-            subprocess.Popen(
-                args,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                env=env
-            )
-        else:
-            subprocess.Popen(args, env=env)
-
-        # Даем время на запуск нового процесса
-        time.sleep(0.5)
-
-        # Закрываем все окна
         self.close_all()
 
-        # Завершаем текущий процесс
+        if getattr(sys, 'frozen', False):
+            executable_path = sys.executable
+
+            if sys.platform == 'win32':
+                subprocess.Popen(
+                    [executable_path],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    shell=False
+                )
+            else:
+                subprocess.Popen([executable_path])
+        else:
+            script_path = os.path.abspath(sys.argv[0])
+            if sys.platform == 'win32':
+                subprocess.Popen(
+                    [sys.executable, script_path],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            else:
+                subprocess.Popen([sys.executable, script_path])
+
+        time.sleep(0.5)
         self.root.quit()
         self.root.destroy()
         os._exit(0)
@@ -198,24 +336,13 @@ class ImageGallery:
         help_menu.add_command(label=self.get_string('menu_about'), command=self.show_about)
 
     def create_widgets(self):
-        """Создает все виджеты главного окна с панелью инструментов в стиле Delphi.
-
-        Панель инструментов содержит иконки (символы эмодзи) всех основных функций:
-        - Открыть, Вставить, Показать выбранные, Показать все
-        - Скрыть/показать окна, Каскад, Сетка
-        - Настройки, Папка, Удалить, Очистить
-        - Выход
-
-        Все подсказки на кнопках используют мультиязычную систему через get_string().
-        """
+        """Создает все виджеты главного окна с панелью инструментов в стиле Delphi."""
         main_container = tk.Frame(self.root, bg='#2b2b2b')
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-        # Создаем панель для кнопки языка в левом верхнем углу
         lang_button_container = tk.Frame(main_container, bg='#2b2b2b')
         lang_button_container.pack(fill=tk.X, pady=(0, 10))
 
-        # Кнопка переключения языка слева сверху
         current_lang = self.settings.get_language()
         lang_button_text = "EN" if current_lang == "ru" else "RU"
         self.lang_button = tk.Button(
@@ -236,12 +363,11 @@ class ImageGallery:
                          font=('Segoe UI', 20, 'bold'), bg='#2b2b2b', fg='white')
         title.pack(pady=(0, 20))
 
-        # Панель инструментов в стиле Delphi - все кнопки-иконки в ряд
         toolbar = tk.Frame(main_container, bg='#3c3c3c', height=35, relief=tk.FLAT, bd=1)
         toolbar.pack(fill=tk.X, pady=(0, 15))
         toolbar.pack_propagate(False)
+        self.toolbar = toolbar
 
-        # Стиль для кнопок панели инструментов
         button_style = {
             'bg': '#3c3c3c',
             'fg': '#ffffff',
@@ -254,106 +380,81 @@ class ImageGallery:
             'activeforeground': '#ffffff'
         }
 
-        # Первая группа: работа с файлами
-        btn_open = tk.Button(toolbar, text="📂", command=self.open_images,
-                             **button_style)
+        btn_open = tk.Button(toolbar, text="📂", command=self.open_images, **button_style)
         btn_open.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_open.bind("<Enter>", lambda e, t=self.get_string('tooltip_open'): self.show_tooltip(e, t))
+        btn_open.bind("<Enter>", lambda e, key='tooltip_open': self.show_tooltip(e, key))
         btn_open.bind("<Leave>", self.hide_tooltip)
 
-        btn_paste = tk.Button(toolbar, text="📋", command=self.paste_from_clipboard,
-                              **button_style)
+        btn_paste = tk.Button(toolbar, text="📋", command=self.paste_from_clipboard, **button_style)
         btn_paste.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_paste.bind("<Enter>", lambda e, t=self.get_string('tooltip_paste'): self.show_tooltip(e, t))
+        btn_paste.bind("<Enter>", lambda e, key='tooltip_paste': self.show_tooltip(e, key))
         btn_paste.bind("<Leave>", self.hide_tooltip)
 
-        # Разделитель
         tk.Frame(toolbar, bg='#5a5a5a', width=2, height=25).pack(side=tk.LEFT, padx=5, pady=3)
 
-        # Вторая группа: показ изображений
-        btn_show_sel = tk.Button(toolbar, text="🖼️", command=self.show_selected,
-                                 **button_style)
+        btn_show_sel = tk.Button(toolbar, text="🖼️", command=self.show_selected, **button_style)
         btn_show_sel.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_show_sel.bind("<Enter>", lambda e, t=self.get_string('tooltip_show_selected'): self.show_tooltip(e, t))
+        btn_show_sel.bind("<Enter>", lambda e, key='tooltip_show_selected': self.show_tooltip(e, key))
         btn_show_sel.bind("<Leave>", self.hide_tooltip)
 
-        btn_show_all = tk.Button(toolbar, text="✨", command=self.show_all,
-                                 **button_style)
+        btn_show_all = tk.Button(toolbar, text="✨", command=self.show_all, **button_style)
         btn_show_all.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_show_all.bind("<Enter>", lambda e, t=self.get_string('tooltip_show_all'): self.show_tooltip(e, t))
+        btn_show_all.bind("<Enter>", lambda e, key='tooltip_show_all': self.show_tooltip(e, key))
         btn_show_all.bind("<Leave>", self.hide_tooltip)
 
-        # Разделитель
         tk.Frame(toolbar, bg='#5a5a5a', width=2, height=25).pack(side=tk.LEFT, padx=5, pady=3)
 
-        # Третья группа: управление окнами
-        btn_toggle = tk.Button(toolbar, text="👁️", command=self.toggle_all_windows,
-                               **button_style)
+        btn_toggle = tk.Button(toolbar, text="👁️", command=self.toggle_all_windows, **button_style)
         btn_toggle.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_toggle.bind("<Enter>", lambda e, t=self.get_string('tooltip_toggle_windows'): self.show_tooltip(e, t))
+        btn_toggle.bind("<Enter>", lambda e, key='tooltip_toggle_windows': self.show_tooltip(e, key))
         btn_toggle.bind("<Leave>", self.hide_tooltip)
 
-        btn_cascade = tk.Button(toolbar, text="📐", command=self.arrange_cascade,
-                                **button_style)
+        btn_cascade = tk.Button(toolbar, text="📐", command=self.arrange_cascade, **button_style)
         btn_cascade.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_cascade.bind("<Enter>", lambda e, t=self.get_string('tooltip_cascade'): self.show_tooltip(e, t))
+        btn_cascade.bind("<Enter>", lambda e, key='tooltip_cascade': self.show_tooltip(e, key))
         btn_cascade.bind("<Leave>", self.hide_tooltip)
 
-        btn_grid = tk.Button(toolbar, text="🔲", command=self.arrange_grid,
-                             **button_style)
+        btn_grid = tk.Button(toolbar, text="🔲", command=self.arrange_grid, **button_style)
         btn_grid.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_grid.bind("<Enter>", lambda e, t=self.get_string('tooltip_grid'): self.show_tooltip(e, t))
+        btn_grid.bind("<Enter>", lambda e, key='tooltip_grid': self.show_tooltip(e, key))
         btn_grid.bind("<Leave>", self.hide_tooltip)
 
-        btn_close_all = tk.Button(toolbar, text="✖", command=self.close_all,
-                                  **button_style)
+        btn_close_all = tk.Button(toolbar, text="✖", command=self.close_all, **button_style)
         btn_close_all.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_close_all.bind("<Enter>", lambda e, t=self.get_string('tooltip_close_all'): self.show_tooltip(e, t))
+        btn_close_all.bind("<Enter>", lambda e, key='tooltip_close_all': self.show_tooltip(e, key))
         btn_close_all.bind("<Leave>", self.hide_tooltip)
 
-        # Разделитель
         tk.Frame(toolbar, bg='#5a5a5a', width=2, height=25).pack(side=tk.LEFT, padx=5, pady=3)
 
-        # Четвертая группа: инструменты
-        btn_settings = tk.Button(toolbar, text="⚙️", command=self.open_settings,
-                                 **button_style)
+        btn_settings = tk.Button(toolbar, text="⚙️", command=self.open_settings, **button_style)
         btn_settings.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_settings.bind("<Enter>", lambda e, t=self.get_string('tooltip_settings'): self.show_tooltip(e, t))
+        btn_settings.bind("<Enter>", lambda e, key='tooltip_settings': self.show_tooltip(e, key))
         btn_settings.bind("<Leave>", self.hide_tooltip)
 
-        btn_folder = tk.Button(toolbar, text="📂", command=self.open_app_folder,
-                               **button_style)
+        btn_folder = tk.Button(toolbar, text="📂", command=self.open_app_folder, **button_style)
         btn_folder.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_folder.bind("<Enter>", lambda e, t=self.get_string('tooltip_app_folder'): self.show_tooltip(e, t))
+        btn_folder.bind("<Enter>", lambda e, key='tooltip_app_folder': self.show_tooltip(e, key))
         btn_folder.bind("<Leave>", self.hide_tooltip)
 
-        # Разделитель
         tk.Frame(toolbar, bg='#5a5a5a', width=2, height=25).pack(side=tk.LEFT, padx=5, pady=3)
 
-        # Пятая группа: редактирование списка
-        btn_delete = tk.Button(toolbar, text="🗑️", command=self.remove_selected,
-                               **button_style)
+        btn_delete = tk.Button(toolbar, text="🗑️", command=self.remove_selected, **button_style)
         btn_delete.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_delete.bind("<Enter>", lambda e, t=self.get_string('tooltip_delete'): self.show_tooltip(e, t))
+        btn_delete.bind("<Enter>", lambda e, key='tooltip_delete': self.show_tooltip(e, key))
         btn_delete.bind("<Leave>", self.hide_tooltip)
 
-        btn_clear = tk.Button(toolbar, text="📭", command=self.clear_list,
-                              **button_style)
+        btn_clear = tk.Button(toolbar, text="📭", command=self.clear_list, **button_style)
         btn_clear.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_clear.bind("<Enter>", lambda e, t=self.get_string('tooltip_clear_list'): self.show_tooltip(e, t))
+        btn_clear.bind("<Enter>", lambda e, key='tooltip_clear_list': self.show_tooltip(e, key))
         btn_clear.bind("<Leave>", self.hide_tooltip)
 
-        # Разделитель
         tk.Frame(toolbar, bg='#5a5a5a', width=2, height=25).pack(side=tk.LEFT, padx=5, pady=3)
 
-        # Шестая группа: выход
-        btn_exit = tk.Button(toolbar, text="🚪", command=self.on_close,
-                             **button_style)
+        btn_exit = tk.Button(toolbar, text="🚪", command=self.on_close, **button_style)
         btn_exit.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_exit.bind("<Enter>", lambda e, t=self.get_string('tooltip_exit'): self.show_tooltip(e, t))
+        btn_exit.bind("<Enter>", lambda e, key='tooltip_exit': self.show_tooltip(e, key))
         btn_exit.bind("<Leave>", self.hide_tooltip)
 
-        # Список изображений
         list_frame = tk.Frame(main_container, bg='#2b2b2b')
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
@@ -574,8 +675,9 @@ class ImageGallery:
             if img is None:
                 messagebox.showinfo("Информация", self.get_string('clipboard_no_image'))
                 return
-            if isinstance(img, Image.Image):
+            if isinstance(img, ImageGrab.Image):
                 if img.mode == 'RGBA':
+                    from PIL import Image
                     background = Image.new('RGB', img.size, (255, 255, 255))
                     background.paste(img, mask=img.split()[3])
                     img = background

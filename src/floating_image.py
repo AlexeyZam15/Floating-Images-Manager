@@ -88,6 +88,31 @@ class FloatingImage:
         self.show_loading_indicator()
         self.load_image_async()
 
+    def update_context_menu_language(self):
+        """
+        Обновляет все тексты контекстного меню на текущий язык без пересоздания окна.
+        Удаляет существующее меню и создает новое с актуальными строками.
+        """
+        if hasattr(self, 'context_menu'):
+            self.context_menu.delete(0, tk.END)
+
+        self.context_menu = tk.Menu(self.master, tearoff=0, bg='#f0f0f0', fg='black')
+        self.context_menu.add_command(label=self.get_string('ctx_zoom_in'), command=self.zoom_in)
+        self.context_menu.add_command(label=self.get_string('ctx_zoom_out'), command=self.zoom_out)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label=self.get_string('ctx_reset_window'), command=self.reset_window)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label=self.get_string('ctx_keep_aspect'), command=self.toggle_keep_aspect)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label=self.get_string('ctx_optimal_size'), command=self.reset_size)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label=self.get_string('ctx_copy_path'), command=self.copy_path)
+        self.context_menu.add_command(label=self.get_string('ctx_close'), command=self.close)
+
+        # Перепривязываем события для показа контекстного меню
+        self.master.bind("<Button-3>", self.show_context_menu)
+        self.canvas.bind("<Button-3>", self.show_context_menu)
+
     def get_string(self, key):
         return self.settings.get_string(key)
 
