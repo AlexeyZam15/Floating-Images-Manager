@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
   
 # 🖼️ Floating Images Manager
@@ -204,4 +203,3 @@ This project is distributed under the MIT license. This means free use, modifica
 **⭐ Star this project if you find it useful!**
 
 </div>
-```
