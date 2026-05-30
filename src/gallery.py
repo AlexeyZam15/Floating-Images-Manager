@@ -194,12 +194,16 @@ class ImageGallery:
     def update_ui_language(self):
         """
         Обновляет все тексты пользовательского интерфейса главного окна на текущем языке.
-        Пересоздает меню и обновляет тексты статических виджетов.
+        Пересоздает меню и обновляет тексты всех статических виджетов.
         Всплывающие подсказки обновляются автоматически при наведении,
         так как они запрашивают актуальный текст по ключу.
         """
         # Обновляем заголовок окна
         self.root.title(self.get_string('app_title'))
+
+        # Обновляем большой заголовок над списком картинок
+        if hasattr(self, 'title_label'):
+            self.title_label.config(text=self.get_string('app_title'))
 
         # Пересоздаем меню (проще чем обновлять каждый пункт)
         self.create_menu()
@@ -359,9 +363,10 @@ class ImageGallery:
         )
         self.lang_button.pack(side=tk.LEFT, anchor='nw')
 
-        title = tk.Label(main_container, text=self.get_string('app_title'),
-                         font=('Segoe UI', 20, 'bold'), bg='#2b2b2b', fg='white')
-        title.pack(pady=(0, 20))
+        # Сохраняем ссылку на заголовок для последующего обновления при смене языка
+        self.title_label = tk.Label(main_container, text=self.get_string('app_title'),
+                                    font=('Segoe UI', 20, 'bold'), bg='#2b2b2b', fg='white')
+        self.title_label.pack(pady=(0, 20))
 
         toolbar = tk.Frame(main_container, bg='#3c3c3c', height=35, relief=tk.FLAT, bd=1)
         toolbar.pack(fill=tk.X, pady=(0, 15))
