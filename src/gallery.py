@@ -205,6 +205,8 @@ class ImageGallery:
         - Скрыть/показать окна, Каскад, Сетка
         - Настройки, Папка, Удалить, Очистить
         - Выход
+
+        Все подсказки на кнопках используют мультиязычную систему через get_string().
         """
         main_container = tk.Frame(self.root, bg='#2b2b2b')
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
@@ -256,13 +258,13 @@ class ImageGallery:
         btn_open = tk.Button(toolbar, text="📂", command=self.open_images,
                              **button_style)
         btn_open.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_open.bind("<Enter>", lambda e, t="Открыть (Ctrl+O)": self.show_tooltip(e, t))
+        btn_open.bind("<Enter>", lambda e, t=self.get_string('tooltip_open'): self.show_tooltip(e, t))
         btn_open.bind("<Leave>", self.hide_tooltip)
 
         btn_paste = tk.Button(toolbar, text="📋", command=self.paste_from_clipboard,
                               **button_style)
         btn_paste.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_paste.bind("<Enter>", lambda e, t="Вставить из буфера (Ctrl+V)": self.show_tooltip(e, t))
+        btn_paste.bind("<Enter>", lambda e, t=self.get_string('tooltip_paste'): self.show_tooltip(e, t))
         btn_paste.bind("<Leave>", self.hide_tooltip)
 
         # Разделитель
@@ -272,13 +274,13 @@ class ImageGallery:
         btn_show_sel = tk.Button(toolbar, text="🖼️", command=self.show_selected,
                                  **button_style)
         btn_show_sel.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_show_sel.bind("<Enter>", lambda e, t="Показать выбранные": self.show_tooltip(e, t))
+        btn_show_sel.bind("<Enter>", lambda e, t=self.get_string('tooltip_show_selected'): self.show_tooltip(e, t))
         btn_show_sel.bind("<Leave>", self.hide_tooltip)
 
         btn_show_all = tk.Button(toolbar, text="✨", command=self.show_all,
                                  **button_style)
         btn_show_all.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_show_all.bind("<Enter>", lambda e, t="Показать все (Ctrl+A)": self.show_tooltip(e, t))
+        btn_show_all.bind("<Enter>", lambda e, t=self.get_string('tooltip_show_all'): self.show_tooltip(e, t))
         btn_show_all.bind("<Leave>", self.hide_tooltip)
 
         # Разделитель
@@ -288,25 +290,25 @@ class ImageGallery:
         btn_toggle = tk.Button(toolbar, text="👁️", command=self.toggle_all_windows,
                                **button_style)
         btn_toggle.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_toggle.bind("<Enter>", lambda e, t="Скрыть/Показать все окна (H)": self.show_tooltip(e, t))
+        btn_toggle.bind("<Enter>", lambda e, t=self.get_string('tooltip_toggle_windows'): self.show_tooltip(e, t))
         btn_toggle.bind("<Leave>", self.hide_tooltip)
 
         btn_cascade = tk.Button(toolbar, text="📐", command=self.arrange_cascade,
                                 **button_style)
         btn_cascade.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_cascade.bind("<Enter>", lambda e, t="Расположить каскадом": self.show_tooltip(e, t))
+        btn_cascade.bind("<Enter>", lambda e, t=self.get_string('tooltip_cascade'): self.show_tooltip(e, t))
         btn_cascade.bind("<Leave>", self.hide_tooltip)
 
         btn_grid = tk.Button(toolbar, text="🔲", command=self.arrange_grid,
                              **button_style)
         btn_grid.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_grid.bind("<Enter>", lambda e, t="Расположить сеткой": self.show_tooltip(e, t))
+        btn_grid.bind("<Enter>", lambda e, t=self.get_string('tooltip_grid'): self.show_tooltip(e, t))
         btn_grid.bind("<Leave>", self.hide_tooltip)
 
         btn_close_all = tk.Button(toolbar, text="✖", command=self.close_all,
                                   **button_style)
         btn_close_all.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_close_all.bind("<Enter>", lambda e, t="Закрыть все окна (Ctrl+W)": self.show_tooltip(e, t))
+        btn_close_all.bind("<Enter>", lambda e, t=self.get_string('tooltip_close_all'): self.show_tooltip(e, t))
         btn_close_all.bind("<Leave>", self.hide_tooltip)
 
         # Разделитель
@@ -316,13 +318,13 @@ class ImageGallery:
         btn_settings = tk.Button(toolbar, text="⚙️", command=self.open_settings,
                                  **button_style)
         btn_settings.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_settings.bind("<Enter>", lambda e, t="Настройки (F1)": self.show_tooltip(e, t))
+        btn_settings.bind("<Enter>", lambda e, t=self.get_string('tooltip_settings'): self.show_tooltip(e, t))
         btn_settings.bind("<Leave>", self.hide_tooltip)
 
         btn_folder = tk.Button(toolbar, text="📂", command=self.open_app_folder,
                                **button_style)
         btn_folder.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_folder.bind("<Enter>", lambda e, t="Папка приложения": self.show_tooltip(e, t))
+        btn_folder.bind("<Enter>", lambda e, t=self.get_string('tooltip_app_folder'): self.show_tooltip(e, t))
         btn_folder.bind("<Leave>", self.hide_tooltip)
 
         # Разделитель
@@ -332,13 +334,13 @@ class ImageGallery:
         btn_delete = tk.Button(toolbar, text="🗑️", command=self.remove_selected,
                                **button_style)
         btn_delete.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_delete.bind("<Enter>", lambda e, t="Удалить выбранные (Del)": self.show_tooltip(e, t))
+        btn_delete.bind("<Enter>", lambda e, t=self.get_string('tooltip_delete'): self.show_tooltip(e, t))
         btn_delete.bind("<Leave>", self.hide_tooltip)
 
         btn_clear = tk.Button(toolbar, text="📭", command=self.clear_list,
                               **button_style)
         btn_clear.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_clear.bind("<Enter>", lambda e, t="Очистить весь список": self.show_tooltip(e, t))
+        btn_clear.bind("<Enter>", lambda e, t=self.get_string('tooltip_clear_list'): self.show_tooltip(e, t))
         btn_clear.bind("<Leave>", self.hide_tooltip)
 
         # Разделитель
@@ -348,7 +350,7 @@ class ImageGallery:
         btn_exit = tk.Button(toolbar, text="🚪", command=self.on_close,
                              **button_style)
         btn_exit.pack(side=tk.LEFT, padx=2, pady=3)
-        btn_exit.bind("<Enter>", lambda e, t="Выход (Ctrl+Q)": self.show_tooltip(e, t))
+        btn_exit.bind("<Enter>", lambda e, t=self.get_string('tooltip_exit'): self.show_tooltip(e, t))
         btn_exit.bind("<Leave>", self.hide_tooltip)
 
         # Список изображений

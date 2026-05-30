@@ -1,4 +1,5 @@
 # src/strings.py
+
 STRINGS = {
     'ru': {
         'app_title': "Менеджер плавающих картинок",
@@ -31,6 +32,21 @@ STRINGS = {
         'exiting': "Закрытие программы, сохраняем список...",
         'error_open_image': "Не удалось открыть изображение",
         'language_changed': "🌐 Язык изменен. Программа будет перезапущена.",
+
+        # Подсказки для кнопок панели инструментов
+        'tooltip_open': "Открыть (Ctrl+O)",
+        'tooltip_paste': "Вставить из буфера (Ctrl+V)",
+        'tooltip_show_selected': "Показать выбранные",
+        'tooltip_show_all': "Показать все (Ctrl+A)",
+        'tooltip_toggle_windows': "Скрыть/Показать все окна (H)",
+        'tooltip_cascade': "Расположить каскадом",
+        'tooltip_grid': "Расположить сеткой",
+        'tooltip_close_all': "Закрыть все окна (Ctrl+W)",
+        'tooltip_settings': "Настройки (F1)",
+        'tooltip_app_folder': "Папка приложения",
+        'tooltip_delete': "Удалить выбранные (Del)",
+        'tooltip_clear_list': "Очистить весь список",
+        'tooltip_exit': "Выход (Ctrl+Q)",
 
         # Меню
         'menu_file': "Файл",
@@ -148,6 +164,21 @@ STRINGS = {
         'exiting': "Exiting, saving gallery...",
         'error_open_image': "Failed to open image",
         'language_changed': "🌐 Language changed. Program will restart.",
+
+        # Tooltips for toolbar buttons
+        'tooltip_open': "Open (Ctrl+O)",
+        'tooltip_paste': "Paste from clipboard (Ctrl+V)",
+        'tooltip_show_selected': "Show selected",
+        'tooltip_show_all': "Show all (Ctrl+A)",
+        'tooltip_toggle_windows': "Hide/Show all windows (H)",
+        'tooltip_cascade': "Arrange cascade",
+        'tooltip_grid': "Arrange grid",
+        'tooltip_close_all': "Close all windows (Ctrl+W)",
+        'tooltip_settings': "Settings (F1)",
+        'tooltip_app_folder': "Application folder",
+        'tooltip_delete': "Delete selected (Del)",
+        'tooltip_clear_list': "Clear entire list",
+        'tooltip_exit': "Exit (Ctrl+Q)",
 
         # Menu
         'menu_file': "File",
