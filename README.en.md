@@ -44,35 +44,6 @@ Thank you for your support! ❤️
 
 ---
 
-## 📥 Installation from source (for developers)
-
-### Requirements
-- Python 3.8 or higher
-- Pillow library
-
-```bash
-pip install Pillow
-```
-
-### Run from source
-
-```bash
-git clone https://github.com/your-username/floating-images-manager.git
-cd floating-images-manager
-python main.py
-```
-
-### Build EXE yourself
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "FloatingImagesManager" main.py
-```
-
-The ready EXE file will appear in the `dist/` folder
-
----
-
 ## 🎮 Usage
 
 ### Main Gallery Window
