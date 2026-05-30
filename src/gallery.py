@@ -101,6 +101,7 @@ class ImageGallery:
         """
         Перезапускает приложение, сохраняя настройки и закрывая все окна.
         Запускает новый процесс перед завершением текущего.
+        Исправляет ошибку с encodings при переключении языка.
         """
         import subprocess
         import sys
@@ -115,15 +116,26 @@ class ImageGallery:
         if getattr(sys, 'frozen', False):
             executable_path = sys.executable
             args = [executable_path]
+
+            # Устанавливаем переменные окружения для encodings
+            env = os.environ.copy()
+            if hasattr(sys, '_MEIPASS'):
+                env['PYTHONPATH'] = sys._MEIPASS
+                env['PATH'] = sys._MEIPASS + os.pathsep + env.get('PATH', '')
         else:
             script_path = os.path.abspath(sys.argv[0])
             args = [sys.executable, script_path] + sys.argv[1:]
+            env = os.environ.copy()
 
         # Запускаем новый процесс
         if sys.platform == 'win32':
-            subprocess.Popen(args, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+            subprocess.Popen(
+                args,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                env=env
+            )
         else:
-            subprocess.Popen(args)
+            subprocess.Popen(args, env=env)
 
         # Даем время на запуск нового процесса
         time.sleep(0.5)
